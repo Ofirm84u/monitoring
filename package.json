@@ -1,0 +1,26 @@
+{
+  "name": "server-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3040",
+    "build": "next build",
+    "start": "next start --port 3040"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "4.2.2",
+    "next": "15.5.15",
+    "nodemailer": "8.0.5",
+    "postcss": "8.5.9",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "tailwindcss": "4.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.17",
+    "@types/nodemailer": "6.4.23",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}
