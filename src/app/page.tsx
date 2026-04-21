@@ -20,6 +20,41 @@ interface SystemInfo {
   uptimeHours: number;
 }
 
+interface ProjectContainer {
+  name: string;
+  status: string;
+  uptime: string;
+}
+
+interface ProjectGitHub {
+  lastCommitMessage: string;
+  lastCommitDate: string;
+  lastCommitAuthor: string;
+  openPRs: number;
+  isPrivate: boolean;
+}
+
+interface ProjectHealth {
+  status: "online" | "stopped" | "errored" | "unhealthy" | "unknown";
+  uptime: string;
+  memoryMb: number;
+}
+
+interface EnrichedProject {
+  id: string;
+  name: string;
+  description: string;
+  stack: string[];
+  url?: string;
+  repo?: string;
+  repoUrl?: string;
+  isPrivate: boolean;
+  runtime: "pm2" | "docker" | "none";
+  github: ProjectGitHub | null;
+  health: ProjectHealth | null;
+  containers: ProjectContainer[];
+}
+
 interface StorageCategory {
   id: string;
   label: string;
@@ -56,6 +91,18 @@ const SITE_LABELS: Record<string, string> = {
   seoapp: "SEO App (app.m84.me)",
   beiteden: "Beit Eden (beiteden.m84.me)",
 };
+
+function formatTimeAgo(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 function StatusDot({ up }: { up: boolean }) {
   return (
@@ -134,6 +181,10 @@ export default function DashboardPage() {
   const [storageError, setStorageError] = useState<string | null>(null);
   const [cleaningAction, setCleaningAction] = useState<string | null>(null);
   const [cleanedActions, setCleanedActions] = useState<Set<string>>(new Set());
+  const [projects, setProjects] = useState<EnrichedProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsFetchedAt, setProjectsFetchedAt] = useState<string | null>(null);
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -152,6 +203,22 @@ export default function DashboardPage() {
       setError(err instanceof Error ? err.message : "Failed to fetch");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      setProjectsLoading(true);
+      const res = await fetch("/api/projects");
+      if (res.status === 401) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setProjects(json.projects);
+      setProjectsFetchedAt(json.fetchedAt);
+    } catch {
+      // Silently fail — projects section is supplementary
+    } finally {
+      setProjectsLoading(false);
     }
   }, []);
 
@@ -192,9 +259,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 30000); // 30s refresh
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+    fetchProjects();
+    const statusInterval = setInterval(fetchStatus, 30000); // 30s refresh
+    const projectsInterval = setInterval(fetchProjects, 60 * 60 * 1000); // 1h refresh
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(projectsInterval);
+    };
+  }, [fetchStatus, fetchProjects]);
 
   const overall = data?.lastCheck?.overall;
   const overallColor =
@@ -600,9 +672,181 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* Projects Overview */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            Projects ({projects.length})
+          </h2>
+          <div className="flex items-center gap-3">
+            {projectsFetchedAt && (
+              <span className="text-xs text-slate-400">
+                Updated {new Date(projectsFetchedAt).toLocaleTimeString()}
+              </span>
+            )}
+            <button
+              onClick={fetchProjects}
+              disabled={projectsLoading}
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              <svg className={`w-3.5 h-3.5 ${projectsLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {projects.map((project) => {
+            const isDeployed = project.runtime !== "none";
+            const isHealthy = project.health?.status === "online";
+            const isUnhealthy = project.health?.status === "unhealthy" || project.health?.status === "errored";
+            const isExpanded = expandedProject === project.id;
+
+            const healthColor = !isDeployed
+              ? "bg-slate-300"
+              : isHealthy
+                ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+                : isUnhealthy
+                  ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse"
+                  : "bg-slate-400";
+
+            const timeAgo = project.github?.lastCommitDate
+              ? formatTimeAgo(project.github.lastCommitDate)
+              : null;
+
+            return (
+              <div
+                key={project.id}
+                onClick={() => setExpandedProject(isExpanded ? null : project.id)}
+                className={`bg-white rounded-2xl border p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                  isUnhealthy ? "border-red-200" : "border-slate-200"
+                }`}
+              >
+                {/* Header */}
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${healthColor}`} />
+                    <h3 className="font-semibold text-sm text-slate-800">{project.name}</h3>
+                    {project.isPrivate && (
+                      <svg className="w-3.5 h-3.5 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 1C8.676 1 6 3.676 6 7v2H4v14h16V9h-2V7c0-3.324-2.676-6-6-6zm0 2c2.276 0 4 1.724 4 4v2H8V7c0-2.276 1.724-4 4-4z" />
+                      </svg>
+                    )}
+                  </div>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    isDeployed
+                      ? isHealthy
+                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                        : isUnhealthy
+                          ? "bg-red-50 text-red-700 border border-red-200"
+                          : "bg-slate-100 text-slate-600 border border-slate-200"
+                      : "bg-blue-50 text-blue-600 border border-blue-200"
+                  }`}>
+                    {isDeployed
+                      ? isHealthy ? "LIVE" : isUnhealthy ? "UNHEALTHY" : "UNKNOWN"
+                      : "DEV"}
+                  </span>
+                </div>
+
+                {/* Description */}
+                <p className="text-xs text-slate-500 mb-3">{project.description}</p>
+
+                {/* Stack badges */}
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {project.stack.map((tech) => (
+                    <span key={tech} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                      {tech}
+                    </span>
+                  ))}
+                </div>
+
+                {/* GitHub info */}
+                {project.github && (
+                  <div className="border-t border-slate-100 pt-2 mt-2">
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <svg className="w-3.5 h-3.5 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                      </svg>
+                      <span className="truncate flex-1" title={project.github.lastCommitMessage}>
+                        {project.github.lastCommitMessage || "No commits"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-[10px] text-slate-400">
+                        {timeAgo && `${timeAgo} by ${project.github.lastCommitAuthor}`}
+                      </span>
+                      {project.github.openPRs > 0 && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600 border border-purple-200">
+                          {project.github.openPRs} PR{project.github.openPRs > 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Expanded details */}
+                {isExpanded && (
+                  <div className="border-t border-slate-100 pt-3 mt-3 space-y-2">
+                    {/* URL */}
+                    {project.url && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">URL:</span>
+                        <a href={project.url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline truncate">
+                          {project.url.replace("https://", "")}
+                        </a>
+                      </div>
+                    )}
+                    {/* GitHub link */}
+                    {project.repoUrl && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">Repo:</span>
+                        <a href={project.repoUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline truncate">
+                          {project.repo}
+                        </a>
+                      </div>
+                    )}
+                    {/* Runtime */}
+                    {isDeployed && project.health && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">Runtime:</span>
+                        <span className="text-slate-700 font-mono">
+                          {project.runtime.toUpperCase()} &middot; {project.health.uptime}
+                          {project.health.memoryMb > 0 && ` · ${project.health.memoryMb}MB`}
+                        </span>
+                      </div>
+                    )}
+                    {/* Containers */}
+                    {project.containers.length > 0 && (
+                      <div className="text-xs">
+                        <span className="text-slate-400">Containers:</span>
+                        <div className="mt-1 space-y-0.5">
+                          {project.containers.map((c) => (
+                            <div key={c.name} className="flex items-center justify-between pl-2">
+                              <span className="font-mono text-slate-600 text-[10px] truncate">{c.name}</span>
+                              <span className={`text-[10px] font-semibold ${c.status === "online" ? "text-emerald-600" : "text-red-600"}`}>
+                                {c.status} ({c.uptime})
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Footer */}
       <div className="mt-6 text-center text-xs text-slate-400">
-        Auto-refreshes every 30 seconds &middot; Cron runs every 2 minutes
+        Auto-refreshes every 30 seconds &middot; Projects refresh every hour &middot; Cron runs every 2 minutes
       </div>
     </div>
   );
