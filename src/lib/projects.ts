@@ -119,6 +119,20 @@ const PROJECTS: ProjectConfig[] = [
     repo: "learning-center",
     runtime: "none",
   },
+  {
+    id: "qa-automation",
+    name: "QA Automation",
+    description: "Automated testing suite",
+    stack: ["Node.js"],
+    runtime: "none",
+  },
+  {
+    id: "linkedin",
+    name: "LinkedIn Tool",
+    description: "LinkedIn automation, analytics & content scheduling",
+    stack: ["Node.js"],
+    runtime: "none",
+  },
 ];
 
 // --- GitHub data ---
