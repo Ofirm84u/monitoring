@@ -20,6 +20,20 @@ interface SystemInfo {
   uptimeHours: number;
 }
 
+interface StorageCategory {
+  id: string;
+  label: string;
+  size: string;
+  sizeBytes: number;
+  cleanable: boolean;
+}
+
+interface StorageScanResult {
+  diskOverall: { used: string; total: string; percent: number; available: string };
+  categories: StorageCategory[];
+  scannedAt: string;
+}
+
 interface MonitorData {
   lastCheck: {
     timestamp: string;
@@ -115,6 +129,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [storageData, setStorageData] = useState<StorageScanResult | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [cleaningAction, setCleaningAction] = useState<string | null>(null);
+  const [cleanedActions, setCleanedActions] = useState<Set<string>>(new Set());
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -133,6 +152,41 @@ export default function DashboardPage() {
       setError(err instanceof Error ? err.message : "Failed to fetch");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const scanStorage = useCallback(async () => {
+    try {
+      setStorageLoading(true);
+      setStorageError(null);
+      const res = await fetch("/api/storage/scan");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setStorageData(json);
+      setCleanedActions(new Set());
+    } catch (err) {
+      setStorageError(err instanceof Error ? err.message : "Failed to scan");
+    } finally {
+      setStorageLoading(false);
+    }
+  }, []);
+
+  const cleanStorage = useCallback(async (actionId: string) => {
+    try {
+      setCleaningAction(actionId);
+      const res = await fetch("/api/storage/clean", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setStorageData(json.updatedScan);
+      setCleanedActions((prev) => new Set(prev).add(actionId));
+    } catch (err) {
+      setStorageError(err instanceof Error ? err.message : "Cleanup failed");
+    } finally {
+      setCleaningAction(null);
     }
   }, []);
 
@@ -303,6 +357,130 @@ export default function DashboardPage() {
             System metrics will appear after the first cron run
           </div>
         )}
+
+        {/* Storage Diagnostics */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+              <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+              Storage Diagnostics
+            </h2>
+            <button
+              onClick={scanStorage}
+              disabled={storageLoading}
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              <svg className={`w-3.5 h-3.5 ${storageLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              {storageLoading ? "Scanning..." : "Scan Storage"}
+            </button>
+          </div>
+
+          {storageError && (
+            <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs">
+              {storageError}
+            </div>
+          )}
+
+          {!storageData && !storageLoading && (
+            <p className="text-sm text-slate-400 text-center py-6">
+              Click &quot;Scan Storage&quot; to analyze disk usage
+            </p>
+          )}
+
+          {storageData && (
+            <div>
+              {/* Overall disk bar */}
+              <div className="mb-4">
+                <GaugeBar
+                  value={storageData.diskOverall.percent}
+                  max={100}
+                  label="Disk Usage"
+                  detail={`${storageData.diskOverall.used} / ${storageData.diskOverall.total} (${storageData.diskOverall.percent}%) — ${storageData.diskOverall.available} free`}
+                  warnThreshold={80}
+                />
+              </div>
+
+              {/* Categories */}
+              {storageData.categories.length === 0 ? (
+                <p className="text-sm text-emerald-600 text-center py-3">
+                  No significant reclaimable storage found
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {storageData.categories.map((cat) => {
+                    const isCleaning = cleaningAction === cat.id;
+                    const isCleaned = cleanedActions.has(cat.id);
+                    return (
+                      <div
+                        key={cat.id}
+                        className={`flex items-center justify-between p-3 rounded-xl transition-colors ${
+                          isCleaned
+                            ? "bg-emerald-50 border border-emerald-200"
+                            : cat.sizeBytes > 1024 ** 3
+                              ? "bg-amber-50/50"
+                              : "bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`inline-block w-2 h-2 rounded-full ${
+                              isCleaned ? "bg-emerald-500" : cat.sizeBytes > 1024 ** 3 ? "bg-amber-500" : "bg-slate-400"
+                            }`}
+                          />
+                          <div>
+                            <p className="font-medium text-sm text-slate-800">{cat.label}</p>
+                            <p className={`text-xs font-mono ${cat.sizeBytes > 1024 ** 3 ? "text-amber-600 font-semibold" : "text-slate-500"}`}>
+                              {cat.size}
+                            </p>
+                          </div>
+                        </div>
+                        {cat.cleanable && !isCleaned && (
+                          <button
+                            onClick={() => cleanStorage(cat.id)}
+                            disabled={cleaningAction !== null}
+                            className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                          >
+                            {isCleaning ? (
+                              <>
+                                <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Cleaning...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Clean
+                              </>
+                            )}
+                          </button>
+                        )}
+                        {isCleaned && (
+                          <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Cleaned
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <p className="text-xs text-slate-400 mt-3 text-right">
+                Scanned {new Date(storageData.scannedAt).toLocaleTimeString()}
+              </p>
+            </div>
+          )}
+        </div>
 
         {/* Docker Containers */}
         {data?.lastCheck?.containers && (
