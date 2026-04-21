@@ -123,14 +123,16 @@ const PROJECTS: ProjectConfig[] = [
     id: "qa-automation",
     name: "QA Automation",
     description: "Automated testing suite",
-    stack: ["Node.js"],
+    stack: ["Node.js", "Playwright"],
+    repo: "qa-automation",
     runtime: "none",
   },
   {
     id: "linkedin",
     name: "LinkedIn Tool",
     description: "LinkedIn automation, analytics & content scheduling",
-    stack: ["Node.js"],
+    stack: ["Next.js", "Gemini", "LinkedIn API"],
+    repo: "linkedin-automation",
     runtime: "none",
   },
 ];
