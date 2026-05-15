@@ -18,7 +18,7 @@ export interface ProjectConfig {
   dockerPrefix?: string;
 }
 
-const PROJECTS: ProjectConfig[] = [
+export const PROJECTS: ProjectConfig[] = [
   {
     id: "bizitis",
     name: "Bizitis",
@@ -26,8 +26,7 @@ const PROJECTS: ProjectConfig[] = [
     stack: ["Next.js", "Postgres", "Redis", "Prisma"],
     repo: "bizitis",
     url: "https://bizitis.co.il",
-    runtime: "pm2",
-    pm2Name: "bizitis",
+    runtime: "docker",
     dockerPrefix: "bizitis",
   },
   {
@@ -62,12 +61,33 @@ const PROJECTS: ProjectConfig[] = [
   },
   {
     id: "eyeindsky",
-    name: "EyeInDSKY",
+    name: "HomeEye",
     description: "CV-powered inventory scanner",
     stack: ["React", "Python", "Postgres", "Redis", "Docker"],
     repo: "EyeInDSKY",
+    url: "https://homeeye.m84.me",
     runtime: "docker",
     dockerPrefix: "home_eye",
+  },
+  {
+    id: "mati",
+    name: "CRM Mati",
+    description: "CRM for Mati (QA / pre-MVP)",
+    stack: ["Next.js", "React 19", "Prisma", "Postgres"],
+    repo: "crm-mati",
+    url: "https://mati.m84.me",
+    runtime: "docker",
+    dockerPrefix: "crm-mati",
+  },
+  {
+    id: "prdaily",
+    name: "PR Daily",
+    description: "Daily content pipeline (Anthropic-powered)",
+    stack: ["Python", "Postgres", "Redis", "Anthropic"],
+    repo: "prdaily",
+    url: "https://pr.m84.me",
+    runtime: "docker",
+    dockerPrefix: "prdaily",
   },
   {
     id: "monitor",

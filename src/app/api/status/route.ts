@@ -57,6 +57,9 @@ export async function GET(request: Request) {
     hudson: "https://hudson.m84.me",
     seoapp: "https://app.m84.me",
     beiteden: "https://beiteden.m84.me",
+    homeeye: "https://homeeye.m84.me",
+    mati: "https://mati.m84.me",
+    prdaily: "https://pr.m84.me",
   };
 
   const liveChecks: Record<string, { status: string; responseTime: number }> = {};

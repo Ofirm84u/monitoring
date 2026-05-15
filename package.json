@@ -8,9 +8,11 @@
     "start": "next start --port 3040"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@tailwindcss/postcss": "4.2.2",
     "next": "15.5.15",
     "nodemailer": "8.0.5",
+    "pdf-parse": "^2.4.5",
     "postcss": "8.5.9",
     "react": "19.2.5",
     "react-dom": "19.2.5",

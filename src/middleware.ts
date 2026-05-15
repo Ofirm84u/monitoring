@@ -16,7 +16,12 @@ export function middleware(request: NextRequest) {
     // Check session cookie exists and has a value
     // (full cryptographic verification happens in isAuthenticated() on API routes)
     const session = request.cookies.get("mon_session");
-    if (!session?.value || session.value.length < 64) {
+    const hasSession = !!session?.value && session.value.length >= 64;
+    // Allow API requests carrying a bot token through to the handler,
+    // which performs the actual token verification.
+    const hasBotToken =
+      pathname.startsWith("/api/") && !!request.headers.get("x-bot-token");
+    if (!hasSession && !hasBotToken) {
       if (pathname.startsWith("/api/")) {
         return new NextResponse(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,

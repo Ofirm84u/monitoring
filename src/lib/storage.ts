@@ -85,25 +85,42 @@ export async function runScan(): Promise<StorageScanResult> {
 
   const categories: StorageCategory[] = [];
 
-  // Docker reclaimable
+  // Docker reclaimable — report build cache and dangling images separately.
+  // Image-layer "reclaimable" from docker system df is misleading: it includes
+  // shared-layer headroom on actively-used images that docker image prune
+  // cannot remove. We only surface what is actually deletable.
   if (dockerResult.exitCode === 0 && dockerResult.stdout.trim()) {
-    let totalReclaimable = 0;
+    let buildCacheReclaimable = 0;
+    let danglingImageReclaimable = 0;
+
     for (const line of dockerResult.stdout.trim().split("\n")) {
       const parts = line.split("\t");
-      if (parts[2]) {
-        // Reclaimable format: "5.96GB (77%)" — extract the size part
-        const sizeMatch = parts[2].match(/^([\d.]+\s*[KMGT]?B)/i);
-        if (sizeMatch) {
-          totalReclaimable += parseSize(sizeMatch[1]);
-        }
-      }
+      const type = parts[0]?.trim();
+      const reclaimStr = parts[2] ?? "";
+      const sizeMatch = reclaimStr.match(/^([\d.]+\s*[KMGT]?B)/i);
+      const bytes = sizeMatch ? parseSize(sizeMatch[1]) : 0;
+
+      if (type === "Build Cache") buildCacheReclaimable = bytes;
+      // Only count images that are truly dangling (0 containers = truly unused)
+      if (type === "Images" && reclaimStr.includes("100%")) danglingImageReclaimable = bytes;
     }
-    if (totalReclaimable > 0) {
+
+    if (buildCacheReclaimable > 0) {
+      categories.push({
+        id: "docker-build-cache",
+        label: "Docker build cache",
+        size: formatSize(buildCacheReclaimable),
+        sizeBytes: buildCacheReclaimable,
+        cleanable: true,
+      });
+    }
+
+    if (danglingImageReclaimable > 0) {
       categories.push({
         id: "docker-images",
-        label: "Docker (reclaimable)",
-        size: formatSize(totalReclaimable),
-        sizeBytes: totalReclaimable,
+        label: "Docker dangling images",
+        size: formatSize(danglingImageReclaimable),
+        sizeBytes: danglingImageReclaimable,
         cleanable: true,
       });
     }
@@ -193,9 +210,14 @@ export async function runScan(): Promise<StorageScanResult> {
 // --- Cleanup ---
 
 const CLEANUP_ACTIONS: Record<string, { label: string; command: string; timeoutMs: number }> = {
+  "docker-build-cache": {
+    label: "Prune Docker build cache",
+    command: "docker builder prune -f",
+    timeoutMs: 60_000,
+  },
   "docker-images": {
-    label: "Prune unused Docker images",
-    command: "docker image prune -af",
+    label: "Prune dangling Docker images",
+    command: "docker image prune -f",
     timeoutMs: 60_000,
   },
   "docker-full": {

@@ -63,6 +63,21 @@ export async function isAuthenticated(): Promise<boolean> {
   return verifySessionToken(session.value) !== null;
 }
 
+/** Check if the request bears a valid bot token (X-Bot-Token header) */
+export function verifyBotTokenHeader(request: Request): boolean {
+  const expected = process.env.BOT_API_TOKEN;
+  if (!expected) return false;
+  const header = request.headers.get("x-bot-token");
+  if (!header) return false;
+  return verifySecret(header, expected);
+}
+
+/** Allow either a valid session OR a valid bot token */
+export async function isAuthenticatedOrBot(request: Request): Promise<boolean> {
+  if (verifyBotTokenHeader(request)) return true;
+  return isAuthenticated();
+}
+
 /** Timing-safe password comparison */
 export function verifyPassword(input: string): boolean {
   const expected = process.env.MONITOR_PASSWORD ?? "";

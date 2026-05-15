@@ -1,6 +1,35 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
+
+type ProjectStage = "production" | "qa" | "dev" | "paused";
+
+interface ProjectNote {
+  stage: ProjectStage;
+  brief: string;
+  nextSteps: string[];
+}
+
+type NotesMap = Record<string, ProjectNote>;
+
+interface BackupInfo {
+  app: string;
+  label: string;
+  latestFile: string | null;
+  latestDate: string | null;
+  latestSizeBytes: number;
+  latestSizeHuman: string;
+  totalObjects: number;
+  totalSizeBytes: number;
+  totalSizeHuman: string;
+  ageHours: number | null;
+}
+
+interface BackupStatus {
+  apps: BackupInfo[];
+  scannedAt: string;
+}
 
 interface LiveCheck {
   status: string;
@@ -90,6 +119,9 @@ const SITE_LABELS: Record<string, string> = {
   hudson: "Hudson (hudson.m84.me)",
   seoapp: "SEO App (app.m84.me)",
   beiteden: "Beit Eden (beiteden.m84.me)",
+  homeeye: "HomeEye (homeeye.m84.me)",
+  mati: "CRM Mati (mati.m84.me)",
+  prdaily: "PR Daily (pr.m84.me)",
 };
 
 function formatTimeAgo(dateStr: string): string {
@@ -171,6 +203,13 @@ function GaugeBar({
   );
 }
 
+const STAGE_COLORS: Record<ProjectStage, string> = {
+  production: "bg-emerald-50 text-emerald-700 border border-emerald-200",
+  qa: "bg-purple-50 text-purple-700 border border-purple-200",
+  dev: "bg-slate-100 text-slate-600 border border-slate-200",
+  paused: "bg-amber-50 text-amber-700 border border-amber-200",
+};
+
 export default function DashboardPage() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -185,6 +224,16 @@ export default function DashboardPage() {
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsFetchedAt, setProjectsFetchedAt] = useState<string | null>(null);
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [backupData, setBackupData] = useState<BackupStatus | null>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<NotesMap>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editStage, setEditStage] = useState<ProjectStage>("dev");
+  const [editBrief, setEditBrief] = useState("");
+  const [editSteps, setEditSteps] = useState("");
+  const [saving, setSaving] = useState(false);
+  const editRef = useRef<HTMLDivElement>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -205,6 +254,61 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, []);
+
+  const fetchNotes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/project-notes");
+      if (!res.ok) return;
+      const json = await res.json();
+      setNotes(json as NotesMap);
+    } catch { /* non-critical */ }
+  }, []);
+
+  const fetchBackups = useCallback(async () => {
+    try {
+      setBackupLoading(true);
+      setBackupError(null);
+      const res = await fetch("/api/backups");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setBackupData(await res.json());
+    } catch (err) {
+      setBackupError(err instanceof Error ? err.message : "Failed to fetch");
+    } finally {
+      setBackupLoading(false);
+    }
+  }, []);
+
+  const startEdit = useCallback((id: string, current: ProjectNote | undefined) => {
+    setEditingId(id);
+    setEditStage(current?.stage ?? "dev");
+    setEditBrief(current?.brief ?? "");
+    setEditSteps((current?.nextSteps ?? []).join("\n"));
+    setTimeout(() => editRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+  }, []);
+
+  const cancelEdit = useCallback(() => setEditingId(null), []);
+
+  const saveNote = useCallback(async (id: string) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/project-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          stage: editStage,
+          brief: editBrief.trim(),
+          nextSteps: editSteps.split("\n").map((s) => s.trim()).filter(Boolean),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = await res.json();
+      setNotes(updated as NotesMap);
+      setEditingId(null);
+    } catch { /* keep edit open on error */ } finally {
+      setSaving(false);
+    }
+  }, [editStage, editBrief, editSteps]);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -260,13 +364,17 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchStatus();
     fetchProjects();
-    const statusInterval = setInterval(fetchStatus, 30000); // 30s refresh
-    const projectsInterval = setInterval(fetchProjects, 60 * 60 * 1000); // 1h refresh
+    fetchNotes();
+    fetchBackups();
+    const statusInterval = setInterval(fetchStatus, 30000);
+    const projectsInterval = setInterval(fetchProjects, 60 * 60 * 1000);
+    const backupsInterval = setInterval(fetchBackups, 60 * 60 * 1000); // refresh every hour
     return () => {
       clearInterval(statusInterval);
       clearInterval(projectsInterval);
+      clearInterval(backupsInterval);
     };
-  }, [fetchStatus, fetchProjects]);
+  }, [fetchStatus, fetchProjects, fetchNotes, fetchBackups]);
 
   const overall = data?.lastCheck?.overall;
   const overallColor =
@@ -295,16 +403,27 @@ export default function DashboardPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={fetchStatus}
-          disabled={loading}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-2"
-        >
-          <svg className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/articles"
+            className="px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+            </svg>
+            Articles
+          </Link>
+          <button
+            onClick={fetchStatus}
+            disabled={loading}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+          >
+            <svg className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -672,6 +791,120 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* GCS Backups */}
+      <div className="mt-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+            </svg>
+            GCS Backups
+          </h2>
+          <div className="flex items-center gap-3">
+            {backupData && (
+              <span className="text-xs text-slate-400">
+                Updated {new Date(backupData.scannedAt).toLocaleTimeString()}
+              </span>
+            )}
+            <button
+              onClick={fetchBackups}
+              disabled={backupLoading}
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              <svg className={`w-3.5 h-3.5 ${backupLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {backupLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        {backupError && (
+          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+            {backupError}
+          </div>
+        )}
+
+        {backupLoading && !backupData && (
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 text-sm shadow-sm">
+            Fetching GCS backup status...
+          </div>
+        )}
+
+        {backupData && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">App</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Latest Backup</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Age</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Size</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Total stored</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {backupData.apps.map((b) => {
+                  const isOk = b.ageHours !== null && b.ageHours < 26;
+                  const isWarn = b.ageHours !== null && b.ageHours >= 26 && b.ageHours < 50;
+                  const isMissing = b.latestFile === null;
+                  const isStale = !isMissing && !isOk && !isWarn;
+
+                  const dotColor = isMissing || isStale
+                    ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse"
+                    : isWarn
+                      ? "bg-amber-400"
+                      : "bg-emerald-500";
+
+                  const ageLabel = b.ageHours === null
+                    ? "—"
+                    : b.ageHours < 1
+                      ? "< 1h ago"
+                      : b.ageHours < 24
+                        ? `${Math.floor(b.ageHours)}h ago`
+                        : `${Math.floor(b.ageHours / 24)}d ${Math.floor(b.ageHours % 24)}h ago`;
+
+                  const filename = b.latestFile
+                    ? b.latestFile.split("/").pop() ?? b.latestFile
+                    : "No backup found";
+
+                  return (
+                    <tr key={b.app} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                          <span className="font-medium text-slate-700">{b.label}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs font-mono text-slate-500 truncate block max-w-[240px]" title={filename}>
+                          {filename}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-semibold ${
+                          isMissing || isStale ? "text-red-600" : isWarn ? "text-amber-600" : "text-emerald-600"
+                        }`}>
+                          {ageLabel}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-xs font-mono text-slate-600">{b.latestSizeHuman}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-xs font-mono text-slate-500">
+                          {b.totalObjects > 0 ? `${b.totalSizeHuman} (${b.totalObjects} files)` : "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Projects Overview */}
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
@@ -706,6 +939,8 @@ export default function DashboardPage() {
             const isHealthy = project.health?.status === "online";
             const isUnhealthy = project.health?.status === "unhealthy" || project.health?.status === "errored";
             const isExpanded = expandedProject === project.id;
+            const note = notes[project.id];
+            const isEditing = editingId === project.id;
 
             const healthColor = !isDeployed
               ? "bg-slate-300"
@@ -729,32 +964,53 @@ export default function DashboardPage() {
               >
                 {/* Header */}
                 <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${healthColor}`} />
-                    <h3 className="font-semibold text-sm text-slate-800">{project.name}</h3>
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className={`inline-block w-2.5 h-2.5 shrink-0 rounded-full ${healthColor}`} />
+                    <h3 className="font-semibold text-sm text-slate-800 truncate">{project.name}</h3>
                     {project.isPrivate && (
-                      <svg className="w-3.5 h-3.5 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-3.5 h-3.5 shrink-0 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 1C8.676 1 6 3.676 6 7v2H4v14h16V9h-2V7c0-3.324-2.676-6-6-6zm0 2c2.276 0 4 1.724 4 4v2H8V7c0-2.276 1.724-4 4-4z" />
                       </svg>
                     )}
                   </div>
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                    isDeployed
-                      ? isHealthy
-                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                        : isUnhealthy
-                          ? "bg-red-50 text-red-700 border border-red-200"
-                          : "bg-slate-100 text-slate-600 border border-slate-200"
-                      : "bg-blue-50 text-blue-600 border border-blue-200"
-                  }`}>
-                    {isDeployed
-                      ? isHealthy ? "LIVE" : isUnhealthy ? "UNHEALTHY" : "UNKNOWN"
-                      : "DEV"}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    {note?.stage && (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STAGE_COLORS[note.stage]}`}>
+                        {note.stage.toUpperCase()}
+                      </span>
+                    )}
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                      isDeployed
+                        ? isHealthy
+                          ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          : isUnhealthy
+                            ? "bg-red-50 text-red-700 border border-red-200"
+                            : "bg-slate-100 text-slate-600 border border-slate-200"
+                        : "bg-blue-50 text-blue-600 border border-blue-200"
+                    }`}>
+                      {isDeployed
+                        ? isHealthy ? "LIVE" : isUnhealthy ? "UNHEALTHY" : "UNKNOWN"
+                        : "DEV"}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startEdit(project.id, note); }}
+                      className="p-1 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Edit project notes"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Description */}
-                <p className="text-xs text-slate-500 mb-3">{project.description}</p>
+                <p className="text-xs text-slate-500 mb-2">{project.description}</p>
+
+                {/* Project brief */}
+                {note?.brief && (
+                  <p className="text-xs text-slate-600 italic mb-2 leading-relaxed">{note.brief}</p>
+                )}
 
                 {/* Stack badges */}
                 <div className="flex flex-wrap gap-1 mb-3">
@@ -764,6 +1020,21 @@ export default function DashboardPage() {
                     </span>
                   ))}
                 </div>
+
+                {/* Next steps */}
+                {note?.nextSteps && note.nextSteps.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Next Steps</p>
+                    <ul className="space-y-0.5">
+                      {note.nextSteps.map((step, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600">
+                          <span className="text-indigo-400 mt-0.5 shrink-0">›</span>
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 {/* GitHub info */}
                 {project.github && (
@@ -785,6 +1056,68 @@ export default function DashboardPage() {
                           {project.github.openPRs} PR{project.github.openPRs > 1 ? "s" : ""}
                         </span>
                       )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline edit form */}
+                {isEditing && (
+                  <div
+                    ref={editRef}
+                    onClick={(e) => e.stopPropagation()}
+                    className="border-t border-indigo-100 pt-3 mt-3"
+                  >
+                    <p className="text-xs font-semibold text-indigo-600 mb-2">Edit Project Notes</p>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide block mb-1">Stage</label>
+                        <select
+                          value={editStage}
+                          onChange={(e) => setEditStage(e.target.value as ProjectStage)}
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        >
+                          <option value="production">Production</option>
+                          <option value="qa">QA</option>
+                          <option value="dev">Dev</option>
+                          <option value="paused">Paused</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide block mb-1">Brief (max 500 chars)</label>
+                        <textarea
+                          value={editBrief}
+                          onChange={(e) => setEditBrief(e.target.value.slice(0, 500))}
+                          rows={3}
+                          placeholder="Short description of current state..."
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide block mb-1">Next Steps (one per line)</label>
+                        <textarea
+                          value={editSteps}
+                          onChange={(e) => setEditSteps(e.target.value)}
+                          rows={4}
+                          placeholder={"Fix login bug\nAdd payment flow\nDeploy to production"}
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        />
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => saveNote(project.id)}
+                          disabled={saving}
+                          className="flex-1 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                        >
+                          {saving ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={saving}
+                          className="flex-1 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-200 disabled:opacity-50 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
