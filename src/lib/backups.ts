@@ -69,7 +69,8 @@ const SOURCES: Array<{ app: string; label: string; bucket: string }> = [
   { app: "beiteden", label: "Beit Eden", bucket: "gs://m84-backups/beiteden/" },
   { app: "bizitis",  label: "Bizitis",  bucket: "gs://m84-backups/bizitis/" },
   { app: "hudson",   label: "Hudson",   bucket: "gs://m84-backups/hudson/" },
-  { app: "prdaily",  label: "PR Daily", bucket: "gs://m84-backups/prdaily/" },
+  { app: "prdaily",  label: "PR Daily DB", bucket: "gs://m84-backups/prdaily/" },
+  { app: "prdaily-files", label: "PR Daily files", bucket: "gs://m84-backups/prdaily/files/" },
   { app: "env-files", label: ".env Secrets", bucket: "gs://m84-backups/env-files/" },
 ];
 

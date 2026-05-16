@@ -410,10 +410,14 @@ export default function ArticlesPage() {
                       <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
                         STANDALONE
                       </span>
-                    ) : assignedName ? (
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    ) : assignedName && article.assignment?.projectId ? (
+                      <Link
+                        href={`/projects/${article.assignment.projectId}`}
+                        className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                        title="Open project plan"
+                      >
                         → {assignedName.toUpperCase()}
-                      </span>
+                      </Link>
                     ) : null}
                     <button
                       onClick={() => remove(article.id)}
@@ -568,6 +572,31 @@ export default function ArticlesPage() {
 
                 {!showAssignmentUi && article.assignment && (
                   <div className="mt-3 pt-3 border-t border-slate-100">
+                    {/* Project plan link */}
+                    {article.assignment.kind === "project" &&
+                      article.assignment.projectId && (
+                        <div className="mb-3">
+                          <Link
+                            href={`/projects/${article.assignment.projectId}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                          >
+                            📋 View project plan
+                            <svg
+                              className="w-3 h-3"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M14 5l7 7m0 0l-7 7m7-7H3"
+                              />
+                            </svg>
+                          </Link>
+                        </div>
+                      )}
                     {/* Gap analysis section */}
                     {article.assignment.kind === "project" && (
                       <div className="mb-2">

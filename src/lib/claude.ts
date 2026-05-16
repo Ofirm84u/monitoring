@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PROJECTS, type ProjectConfig } from "./projects";
-import type { ArticleSuggestion, ArticleSummary } from "./articles";
+import type { Article, ArticleSuggestion, ArticleSummary } from "./articles";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
 const MAX_OUTPUT_TOKENS = 1500;
@@ -132,32 +132,163 @@ function validateAnalysis(parsed: unknown): ClaudeAnalysis {
   };
 }
 
+export async function synthesizeProjectPlan(
+  project: ProjectConfig,
+  articles: Article[],
+  codeContext?: string | null,
+): Promise<string> {
+  if (articles.length === 0) {
+    throw new Error("No articles assigned to this project yet");
+  }
+
+  const articleBlocks = articles
+    .map((a, i) => {
+      const summary = a.summary
+        ? `TL;DR: ${a.summary.tldr}\nKey ideas:\n${a.summary.keyIdeas.map((k) => `  - ${k}`).join("\n")}`
+        : "";
+      const gap = a.gapAnalysis?.text
+        ? `\nGap analysis:\n${a.gapAnalysis.text}`
+        : "";
+      const source = a.source.url ? `URL: ${a.source.url}` : `Source: ${a.source.kind}`;
+      return `--- Article ${i + 1}: ${a.title} ---\n${source}\n${summary}${gap}`;
+    })
+    .join("\n\n");
+
+  const codeBlock = codeContext
+    ? `\n\nPROJECT CODE (excerpt — cite specific functions/locations when relevant):\n${codeContext}\n`
+    : "";
+
+  const system = `You are consolidating multiple article-driven suggestions into a single, prioritised implementation plan for a project. The plan must be concrete enough to paste into Claude Code and execute.
+
+PROJECT IN FOCUS:
+- name: ${project.name}
+- description: ${project.description}
+- stack: ${project.stack.join(", ")}${codeBlock}
+
+OUTPUT REQUIREMENTS:
+- Respond in HEBREW (RTL). Use Hebrew for narrative, English for code identifiers/keywords.
+- Use Markdown formatting (headings, bold, tables, code fences).
+- Deduplicate and MERGE overlapping suggestions across articles — don't list the same idea twice.
+- Cite source article numbers in parentheses, e.g. "(מאמר 1, 3)".
+- Reference specific functions/files/line numbers ONLY if the PROJECT CODE excerpt contains them — never invent.
+- Length: 600–1200 words.
+- End with a copy-pasteable Claude Code prompt block.
+- Follow this exact structure:
+
+# תכנית יישום — ${project.name}
+
+## סיכום
+משפט-שניים על מה ההצעות מציעות במצטבר ולמה זה רלוונטי לפרויקט.
+
+## עדיפות גבוהה (יישום ראשון — השבוע)
+### 1. [כותרת ההצעה]
+**מקור:** (מאמר 1, 3)
+**מה:** משפט-שניים.
+**איפה / איך:** מיקום בקוד (אם ידוע מהקטע למעלה — לצטט בדיוק).
+\`\`\`${project.stack.includes("Python") ? "python" : "typescript"}
+// example code — 5-15 שורות
+\`\`\`
+**תועלת:** ...
+
+### 2. [...]
+[אותו פורמט]
+
+## עדיפות בינונית (Sprint הבא)
+### 3. [...]
+
+## עדיפות נמוכה (חקירה / nice-to-have)
+### 4. [...]
+
+## טבלת סיכום
+| # | הצעה | מקור | מורכבות | ערך |
+|---|------|------|---------|-----|
+| 1 | ... | מאמר X | נמוכה/בינונית/גבוהה | נמוך/בינוני/גבוה |
+
+## פרומפט מוכן ל-Claude Code (למעבר לפרויקט ${project.name})
+\`\`\`
+אני עובד על פרויקט ${project.name} (${project.stack.join(", ")}). יש לי תכנית עבודה שאני רוצה ליישם בעדיפות:
+
+[להעתיק לכאן את ההצעות בעדיפות גבוהה כפי שמופיעות למעלה, כולל קטעי הקוד]
+
+תתחיל מהצעה 1: [כותרת]. תקרא את הקוד הרלוונטי, תציג לי diff לפני שאתה משנה.
+\`\`\``;
+
+  const userMessage = `Source articles (in chronological order, newest last):
+
+${articleBlocks}`;
+
+  const response = await getClient().messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const block = response.content[0];
+  if (!block || block.type !== "text") {
+    throw new Error("Unexpected response shape from Claude");
+  }
+  return block.text.trim();
+}
+
 export async function analyzeGap(
   project: ProjectConfig,
   articleTitle: string,
   articleText: string,
+  codeContext?: string | null,
 ): Promise<string> {
+  const codeBlock = codeContext
+    ? `\n\nPROJECT CODE (excerpt — use this to cite specific functions/locations):\n${codeContext}\n`
+    : "";
+
   const system = `You are advising a solo developer/founder on how to apply ideas from an article to one of their projects.
 
 PROJECT IN FOCUS:
 - name: ${project.name}
 - description: ${project.description}
-- stack: ${project.stack.join(", ")}
+- stack: ${project.stack.join(", ")}${codeBlock}
 
 OUTPUT REQUIREMENTS:
-- Respond in English.
-- Plain text only (no markdown fences, no JSON).
-- Keep it under ~400 words.
-- Use the following structure with these exact section headers:
+- Respond in HEBREW (RTL). Use Hebrew for narrative, English for code identifiers/keywords.
+- Use Markdown formatting (headings, bold, tables, code fences).
+- Be concrete and actionable. Reference specific functions/files/line numbers ONLY if the PROJECT CODE excerpt above contains them — never invent locations.
+- Length: 350–700 words.
+- Follow this exact structure:
 
-## What's the gap
-2-4 bullets describing what this project is likely missing or could improve, based on the article's ideas.
+# ניתוח המאמר
 
-## Concrete next steps
-3-5 actionable bullets — specific, scoped tasks the developer could do this week or next sprint.
+## 1. תמצית
+2–3 משפטים שמסכמים את המאמר.
 
-## Risks / caveats
-1-3 bullets — what could go wrong, what to verify first, or where the article's advice doesn't quite fit this stack.`;
+## 2. רלוונטיות לפרויקט
+**מה הכלי כבר מכסה:** רשימת bullet קצרה (אם אפשר להסיק מהתיאור/קוד).
+
+**מה חסר:** רשימת bullet — היכן יש פער בין הרעיונות במאמר לפרויקט.
+
+## 3. הצעות קונקרטיות
+
+### הצעה א׳ — [כותרת קצרה]
+**מה:** תיאור קצר במשפט-שניים.
+**איפה / איך ליישם:** מיקום בקוד (אם ידוע מהקטע למעלה — צטט פונקציה/שורות; אחרת תיאור כללי של איפה זה ישתלב).
+\`\`\`${project.stack.includes("Python") ? "python" : project.stack.includes("Next.js") || project.stack.includes("React") ? "typescript" : "javascript"}
+// example code snippet — דוגמה מעשית קצרה (5-15 שורות)
+\`\`\`
+**תועלת:** למה זה שווה — תוצאה מצופה.
+
+### הצעה ב׳ — [כותרת]
+[אותו פורמט]
+
+### הצעה ג׳ — [כותרת]
+[אותו פורמט]
+
+(הוסף הצעה ד׳ אם המאמר באמת מצדיק 4 רעיונות.)
+
+## 4. סיכום עדיפויות
+| הצעה | מורכבות | ערך |
+|------|---------|-----|
+| א׳ — ... | נמוכה/בינונית/גבוהה | נמוך/בינוני/גבוה |
+| ב׳ — ... | ... | ... |
+| ג׳ — ... | ... | ... |`;
 
   const userMessage = `ARTICLE TITLE: ${articleTitle}
 
@@ -166,7 +297,7 @@ ${articleText}`;
 
   const response = await getClient().messages.create({
     model: MODEL,
-    max_tokens: 1200,
+    max_tokens: 3000,
     system,
     messages: [{ role: "user", content: userMessage }],
   });

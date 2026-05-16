@@ -17,7 +17,7 @@ module.exports = {
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       autorestart: true,
-      max_memory_restart: '256M'
+      max_memory_restart: '1G'
     },
     {
       name: 'monitor-bot',

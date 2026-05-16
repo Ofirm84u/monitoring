@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import { isAuthenticatedOrBot } from "@/lib/auth";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { getArticle, updateArticle } from "@/lib/articles";
+import { listArticles } from "@/lib/articles";
 import { PROJECTS } from "@/lib/projects";
-import { analyzeGap } from "@/lib/claude";
+import { synthesizeProjectPlan } from "@/lib/claude";
 
+const RATE_LIMIT = { maxAttempts: 5, windowMs: 60 * 1000 };
 const MAX_CODE_CONTEXT_CHARS = 12_000;
+const MAX_ARTICLES = 30;
 
 async function loadProjectCodeContext(
   projectId: string,
@@ -17,8 +19,6 @@ async function loadProjectCodeContext(
   try {
     const raw = await readFile(path, "utf-8");
     if (raw.length <= MAX_CODE_CONTEXT_CHARS) return raw;
-    // Take the first half and the last quarter — keeps imports + entry points
-    // and recent code, which is usually most relevant for gap analysis.
     const head = raw.slice(0, Math.floor(MAX_CODE_CONTEXT_CHARS * 0.7));
     const tail = raw.slice(-Math.floor(MAX_CODE_CONTEXT_CHARS * 0.3));
     return `${head}\n\n/* ... [truncated middle of file] ... */\n\n${tail}`;
@@ -26,8 +26,6 @@ async function loadProjectCodeContext(
     return null;
   }
 }
-
-const RATE_LIMIT = { maxAttempts: 10, windowMs: 60 * 1000 };
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
@@ -45,52 +43,45 @@ export async function POST(request: Request, { params }: RouteContext) {
     return json(401, { error: "Unauthorized" });
   }
   const ip = getClientIp(request);
-  if (!checkRateLimit(`gap-analysis:${ip}`, RATE_LIMIT).allowed) {
+  if (!checkRateLimit(`project-plan:${ip}`, RATE_LIMIT).allowed) {
     return json(429, { error: "Rate limit exceeded" });
   }
 
   const { id } = await params;
-  const article = await getArticle(id);
-  if (!article) return json(404, { error: "Article not found" });
+  const project = PROJECTS.find((p) => p.id === id);
+  if (!project) return json(404, { error: "Project not found" });
 
-  if (
-    !article.assignment ||
-    article.assignment.kind !== "project" ||
-    !article.assignment.projectId
-  ) {
+  const allArticles = await listArticles();
+  const projectArticles = allArticles
+    .filter(
+      (a) =>
+        a.assignment?.kind === "project" &&
+        a.assignment.projectId === project.id,
+    )
+    .slice(0, MAX_ARTICLES);
+
+  if (projectArticles.length === 0) {
     return json(400, {
-      error: "Article must be assigned to a project before gap analysis",
+      error: "No articles are assigned to this project yet",
     });
-  }
-
-  const project = PROJECTS.find((p) => p.id === article.assignment!.projectId);
-  if (!project) {
-    return json(400, { error: "Assigned project no longer exists" });
-  }
-
-  const text = article.fullText ?? article.rawTextSnippet;
-  if (!text) {
-    return json(400, { error: "Article has no text content stored" });
   }
 
   const codeContext = await loadProjectCodeContext(project.id);
 
-  let gapText: string;
+  let plan: string;
   try {
-    gapText = await analyzeGap(project, article.title, text, codeContext);
+    plan = await synthesizeProjectPlan(project, projectArticles, codeContext);
   } catch (err) {
     return json(502, {
-      error: err instanceof Error ? err.message : "Gap analysis failed",
+      error:
+        err instanceof Error ? err.message : "Plan synthesis failed",
     });
   }
 
-  const updated = await updateArticle(id, {
-    gapAnalysis: {
-      projectId: project.id,
-      text: gapText,
-      generatedAt: new Date().toISOString(),
-    },
+  return json(200, {
+    project: { id: project.id, name: project.name, stack: project.stack },
+    articleCount: projectArticles.length,
+    plan,
+    generatedAt: new Date().toISOString(),
   });
-
-  return json(200, { article: updated });
 }
