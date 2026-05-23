@@ -56,6 +56,7 @@ _ensure("python-telegram-bot>=20.0", "requests")
 
 import requests
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
@@ -188,6 +189,41 @@ def api_list_projects() -> list[dict]:
     resp.raise_for_status()
     _projects_cache = resp.json().get("projects", [])
     return _projects_cache
+
+
+def api_create_task(text: str, project_id: Optional[str] = None) -> dict:
+    payload: dict = {"text": text}
+    if project_id:
+        payload["projectId"] = project_id
+    resp = requests.post(
+        f"{API_URL}/api/tasks",
+        headers=_api_headers(),
+        json=payload,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()["task"]
+
+
+def api_list_tasks() -> list[dict]:
+    resp = requests.get(
+        f"{API_URL}/api/tasks",
+        headers=_api_headers(),
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json().get("tasks", [])
+
+
+def api_update_task(task_id: str, **kwargs) -> dict:
+    resp = requests.patch(
+        f"{API_URL}/api/tasks/{task_id}",
+        headers=_api_headers(),
+        json=kwargs,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()["task"]
 
 
 # ── Formatting ────────────────────────────────────────────────────────────────
@@ -471,6 +507,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    if action == "task_project" and len(parts) == 3:
+        task_id, project_id = parts[1], parts[2]
+        try:
+            if project_id == "__none__":
+                api_update_task(task_id, projectId=None)
+                await query.edit_message_text("✅ Task saved with no project.")
+            else:
+                api_update_task(task_id, projectId=project_id)
+                project_name = next(
+                    (p["name"] for p in api_list_projects() if p["id"] == project_id),
+                    project_id,
+                )
+                await query.edit_message_text(f"✅ Task assigned to *{project_name}*", parse_mode="Markdown")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+        return
+
     if action == "back" and len(parts) == 2:
         article_id = parts[1]
         # Reconstruct keyboard from cache only (suggestions list is small; reconstructed minimal)
@@ -508,13 +561,137 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
 
+# ── Task helpers ──────────────────────────────────────────────────────────────
+
+
+def _build_project_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    projects = api_list_projects()
+    projects_sorted = sorted(projects, key=lambda p: p["name"].lower())
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in projects_sorted:
+        rows.append([
+            InlineKeyboardButton(
+                p["name"],
+                callback_data=f"task_project:{task_id}:{p['id']}",
+            )
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            "🚫 No project",
+            callback_data=f"task_project:{task_id}:__none__",
+        )
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _format_tasks(tasks: list[dict]) -> str:
+    open_tasks = [t for t in tasks if not t["done"]]
+    if not open_tasks:
+        return "✅ No open tasks!"
+
+    # Group by project
+    projects = {p["id"]: p["name"] for p in api_list_projects()}
+    grouped: dict[str, list[tuple[int, dict]]] = {}
+    for i, task in enumerate(open_tasks, 1):
+        pid = task.get("projectId") or "__none__"
+        grouped.setdefault(pid, []).append((i, task))
+
+    lines: list[str] = ["📋 *Open tasks:*\n"]
+    for pid, items in grouped.items():
+        label = projects.get(pid, "No project") if pid != "__none__" else "No project"
+        lines.append(f"*{label}*")
+        for num, task in items:
+            lines.append(f"  {num}. {task['text']}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+# ── Task command handlers ──────────────────────────────────────────────────────
+
+
+@authorized_only
+async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text(
+            "Usage: /task <description>\nExample: /task Write landing page copy"
+        )
+        return
+
+    try:
+        task = api_create_task(text)
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
+
+    await update.message.reply_text(
+        f"✅ Task saved!\n\n*{text}*\n\nWhich project is this for?",
+        parse_mode="Markdown",
+        reply_markup=_build_project_keyboard(task["id"]),
+    )
+
+
+@authorized_only
+async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        tasks = api_list_tasks()
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
+
+    await update.message.reply_text(_format_tasks(tasks), parse_mode="Markdown")
+
+
+@authorized_only
+async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /done <number>\nUse /tasks to see task numbers."
+        )
+        return
+
+    try:
+        num = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Please provide a valid task number.")
+        return
+
+    try:
+        tasks = api_list_tasks()
+        open_tasks = [t for t in tasks if not t["done"]]
+        if num < 1 or num > len(open_tasks):
+            await update.message.reply_text(
+                f"No task #{num}. Use /tasks to see available tasks."
+            )
+            return
+        task = open_tasks[num - 1]
+        api_update_task(task["id"], done=True)
+        await update.message.reply_text(f"✅ Done: _{task['text']}_", parse_mode="Markdown")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+async def post_init(app: Application) -> None:
+    await app.bot.set_my_commands([
+        BotCommand("start", "Introduction & help"),
+        BotCommand("task", "Add a new task: /task <description>"),
+        BotCommand("tasks", "Show open tasks"),
+        BotCommand("done", "Mark task complete: /done <number>"),
+        BotCommand("whoami", "Show your Telegram user ID"),
+    ])
+    log.info("Bot commands registered with Telegram")
+
+
 def main() -> None:
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("whoami", cmd_whoami))
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("task", cmd_task))
+    app.add_handler(CommandHandler("tasks", cmd_tasks))
+    app.add_handler(CommandHandler("done", cmd_done))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(handle_callback))
