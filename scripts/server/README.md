@@ -25,6 +25,10 @@ Add to `crontab -e` on the VM:
 
 # Daily backup-freshness check + Telegram alert (10:00 UTC = 13:00 Israel)
 0 10 * * * /home/ofir/scripts/backup-freshness-check.sh >> /home/ofir/scripts/freshness.log 2>&1
+
+# Weekly Docker image prune (Sunday 04:30 UTC) — removes all unused images
+# Updated 2026-05-28: removed 30d filter; the filter barely freed anything since most unused images are recent
+30 4 * * 0 docker image prune -a -f >> /home/ofir/monitoring/docker-prune.log 2>&1
 ```
 
 ## Dependencies
