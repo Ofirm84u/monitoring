@@ -204,6 +204,43 @@ OUTPUT REQUIREMENTS:
 |---|------|------|---------|-----|
 | 1 | ... | מאמר X | נמוכה/בינונית/גבוהה | נמוך/בינוני/גבוה |
 
+## תכנית QA ובדיקות
+
+### בדיקות יחידה (Unit Tests)
+לכל הצעה בעדיפות גבוהה/בינונית — פרט:
+- **מה לבדוק:** הפונקציה/מודול המרכזי שמושפע
+- **קייסים:** happy path, edge cases, שגיאות צפויות
+- **דוגמת טסט:**
+\`\`\`${project.stack.includes("Python") ? "python" : "typescript"}
+// unit test example — 5-10 שורות
+\`\`\`
+
+### בדיקות עשן (Smoke Tests)
+רשימת בדיקות מהירות לוידוא שהמערכת עובדת לאחר כל deploy:
+- [ ] [endpoint / feature קריטי 1]
+- [ ] [endpoint / feature קריטי 2]
+- [ ] [endpoint / feature קריטי 3]
+
+### בדיקות אוטומטיות (CI/CD)
+- פרט אילו בדיקות צריכות לרוץ ב-pipeline
+- הגדר threshold לכיסוי קוד (מינימום מומלץ לפרויקט זה)
+- ציין כלים מומלצים (Jest/Pytest/Playwright/etc.) לפי הסטאק
+
+### סקירת קוד (Code Review Checklist)
+לפני כל merge של ההצעות הנ"ל, לוודא:
+- [ ] אין רגרסיות בפונקציונליות קיימת
+- [ ] הקוד עומד בסטנדרט הטיפוסים (TypeScript strict / Python type hints)
+- [ ] אין חשיפת secrets או API keys
+- [ ] לוגינג ו-error handling תקינים
+- [ ] ביצועים — אין N+1 queries או קריאות מיותרות ל-LLM
+
+### בדיקות אבטחה (Security)
+- [ ] ולידציה של כל input חיצוני (user / API / webhook)
+- [ ] הרשאות — לוודא שאין endpoint חשוף ללא auth
+- [ ] תלויות — לבדוק \`npm audit\` / \`pip-audit\` לאחר הוספת חבילות
+- [ ] XSS / Injection — לוודא sanitization בכל render של תוכן דינמי
+- [ ] Rate limiting על endpoints חדשים
+
 ## פרומפט מוכן ל-Claude Code (למעבר לפרויקט ${project.name})
 \`\`\`
 אני עובד על פרויקט ${project.name} (${project.stack.join(", ")}). יש לי תכנית עבודה שאני רוצה ליישם בעדיפות:
@@ -211,6 +248,7 @@ OUTPUT REQUIREMENTS:
 [להעתיק לכאן את ההצעות בעדיפות גבוהה כפי שמופיעות למעלה, כולל קטעי הקוד]
 
 תתחיל מהצעה 1: [כותרת]. תקרא את הקוד הרלוונטי, תציג לי diff לפני שאתה משנה.
+לאחר היישום — כתוב unit tests לפי תכנית הבדיקות, הרץ smoke tests, ובצע code review checklist לפני שאתה מדווח שסיימת.
 \`\`\``;
 
   const userMessage = `Source articles (in chronological order, newest last):
@@ -219,7 +257,7 @@ ${articleBlocks}`;
 
   const response = await getClient().messages.create({
     model: MODEL,
-    max_tokens: 4000,
+    max_tokens: 6000,
     system,
     messages: [{ role: "user", content: userMessage }],
   });
