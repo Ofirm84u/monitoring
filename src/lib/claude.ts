@@ -132,141 +132,192 @@ function validateAnalysis(parsed: unknown): ClaudeAnalysis {
   };
 }
 
-export async function synthesizeProjectPlan(
+export interface ArticlePlan {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+const IMPL_MAX_TOKENS = 3500;
+const QA_MAX_TOKENS = 2500;
+
+function codeLanguage(stack: string[]): string {
+  if (stack.includes("Python")) return "python";
+  return "typescript";
+}
+
+export async function planArticleImplementation(
   project: ProjectConfig,
-  articles: Article[],
+  article: Article,
   codeContext?: string | null,
-): Promise<string> {
-  if (articles.length === 0) {
-    throw new Error("No articles assigned to this project yet");
-  }
-
-  const articleBlocks = articles
-    .map((a, i) => {
-      const summary = a.summary
-        ? `TL;DR: ${a.summary.tldr}\nKey ideas:\n${a.summary.keyIdeas.map((k) => `  - ${k}`).join("\n")}`
-        : "";
-      const gap = a.gapAnalysis?.text
-        ? `\nGap analysis:\n${a.gapAnalysis.text}`
-        : "";
-      const source = a.source.url ? `URL: ${a.source.url}` : `Source: ${a.source.kind}`;
-      return `--- Article ${i + 1}: ${a.title} ---\n${source}\n${summary}${gap}`;
-    })
-    .join("\n\n");
-
+): Promise<ArticlePlan> {
   const codeBlock = codeContext
-    ? `\n\nPROJECT CODE (excerpt — cite specific functions/locations when relevant):\n${codeContext}\n`
+    ? `\nPROJECT CODE (excerpt — cite exact functions/lines if present, never invent):\n${codeContext}\n`
     : "";
 
-  const system = `You are consolidating multiple article-driven suggestions into a single, prioritised implementation plan for a project. The plan must be concrete enough to paste into Claude Code and execute.
+  const keyIdeas = article.summary?.keyIdeas.map((k) => `  - ${k}`).join("\n") ?? "";
+  const gapBlock = article.gapAnalysis?.text
+    ? `\nGAP ANALYSIS:\n${article.gapAnalysis.text}`
+    : "";
+  const source = article.source.url ? `URL: ${article.source.url}` : `Source: ${article.source.kind}`;
+  const lang = codeLanguage(project.stack);
 
-PROJECT IN FOCUS:
-- name: ${project.name}
-- description: ${project.description}
-- stack: ${project.stack.join(", ")}${codeBlock}
+  const system = `You are writing a complete, executable implementation plan for a single article's contribution to a project. The plan is pasted directly into Claude Code — it must be 100% complete, never truncated.
 
-OUTPUT REQUIREMENTS:
-- Respond in HEBREW (RTL). Use Hebrew for narrative, English for code identifiers/keywords.
-- Use Markdown formatting (headings, bold, tables, code fences).
-- Deduplicate and MERGE overlapping suggestions across articles — don't list the same idea twice.
-- Cite source article numbers in parentheses, e.g. "(מאמר 1, 3)".
-- Reference specific functions/files/line numbers ONLY if the PROJECT CODE excerpt contains them — never invent.
-- Length: 600–1200 words.
-- End with a copy-pasteable Claude Code prompt block.
-- Follow this exact structure:
+PROJECT: ${project.name}
+STACK: ${project.stack.join(", ")}
+DESCRIPTION: ${project.description}${codeBlock}
 
-# תכנית יישום — ${project.name}
+RULES:
+- Respond in HEBREW. Use English for code identifiers, keywords, and file paths.
+- COMPLETE every section. Do not summarise or skip.
+- Cite exact file/function locations only if they appear in the PROJECT CODE excerpt above.
+- Length: 400–700 words.
 
-## סיכום
-משפט-שניים על מה ההצעות מציעות במצטבר ולמה זה רלוונטי לפרויקט.
+STRUCTURE — follow exactly, no additions or omissions:
 
-## עדיפות גבוהה (יישום ראשון — השבוע)
-### 1. [כותרת ההצעה]
-**מקור:** (מאמר 1, 3)
-**מה:** משפט-שניים.
-**איפה / איך:** מיקום בקוד (אם ידוע מהקטע למעלה — לצטט בדיוק).
-\`\`\`${project.stack.includes("Python") ? "python" : "typescript"}
-// example code — 5-15 שורות
+# תכנית יישום — ${article.title}
+
+## תמצית השינוי
+2 משפטים: מה המאמר מציע וכיצד ישתלב בפרויקט.
+
+## שלבי יישום
+
+### שלב 1 — [כותרת ספציפית]
+**מה לשנות:** משפט אחד.
+**איפה / איך:**
+\`\`\`${lang}
+// קוד לדוגמה — 5–12 שורות, מוכן להעתקה
 \`\`\`
-**תועלת:** ...
+**תוצאה מצופה:** משפט אחד.
 
-### 2. [...]
+### שלב 2 — [כותרת ספציפית]
 [אותו פורמט]
 
-## עדיפות בינונית (Sprint הבא)
-### 3. [...]
+(הוסף שלב 3 רק אם נדרש — לא יותר)
 
-## עדיפות נמוכה (חקירה / nice-to-have)
-### 4. [...]
+## טבלת עדיפויות
+| שלב | מורכבות | ערך | זמן משוער |
+|-----|---------|-----|-----------|
+| 1 — ... | נמוכה/בינונית/גבוהה | נמוך/בינוני/גבוה | Xh |
+| 2 — ... | ... | ... | ... |
 
-## טבלת סיכום
-| # | הצעה | מקור | מורכבות | ערך |
-|---|------|------|---------|-----|
-| 1 | ... | מאמר X | נמוכה/בינונית/גבוהה | נמוך/בינוני/גבוה |
-
-## תכנית QA ובדיקות
-
-### בדיקות יחידה (Unit Tests)
-לכל הצעה בעדיפות גבוהה/בינונית — פרט:
-- **מה לבדוק:** הפונקציה/מודול המרכזי שמושפע
-- **קייסים:** happy path, edge cases, שגיאות צפויות
-- **דוגמת טסט:**
-\`\`\`${project.stack.includes("Python") ? "python" : "typescript"}
-// unit test example — 5-10 שורות
+## פרומפט ל-Claude Code
 \`\`\`
-
-### בדיקות עשן (Smoke Tests)
-רשימת בדיקות מהירות לוידוא שהמערכת עובדת לאחר כל deploy:
-- [ ] [endpoint / feature קריטי 1]
-- [ ] [endpoint / feature קריטי 2]
-- [ ] [endpoint / feature קריטי 3]
-
-### בדיקות אוטומטיות (CI/CD)
-- פרט אילו בדיקות צריכות לרוץ ב-pipeline
-- הגדר threshold לכיסוי קוד (מינימום מומלץ לפרויקט זה)
-- ציין כלים מומלצים (Jest/Pytest/Playwright/etc.) לפי הסטאק
-
-### סקירת קוד (Code Review Checklist)
-לפני כל merge של ההצעות הנ"ל, לוודא:
-- [ ] אין רגרסיות בפונקציונליות קיימת
-- [ ] הקוד עומד בסטנדרט הטיפוסים (TypeScript strict / Python type hints)
-- [ ] אין חשיפת secrets או API keys
-- [ ] לוגינג ו-error handling תקינים
-- [ ] ביצועים — אין N+1 queries או קריאות מיותרות ל-LLM
-
-### בדיקות אבטחה (Security)
-- [ ] ולידציה של כל input חיצוני (user / API / webhook)
-- [ ] הרשאות — לוודא שאין endpoint חשוף ללא auth
-- [ ] תלויות — לבדוק \`npm audit\` / \`pip-audit\` לאחר הוספת חבילות
-- [ ] XSS / Injection — לוודא sanitization בכל render של תוכן דינמי
-- [ ] Rate limiting על endpoints חדשים
-
-## פרומפט מוכן ל-Claude Code (למעבר לפרויקט ${project.name})
-\`\`\`
-אני עובד על פרויקט ${project.name} (${project.stack.join(", ")}). יש לי תכנית עבודה שאני רוצה ליישם בעדיפות:
-
-[להעתיק לכאן את ההצעות בעדיפות גבוהה כפי שמופיעות למעלה, כולל קטעי הקוד]
-
-תתחיל מהצעה 1: [כותרת]. תקרא את הקוד הרלוונטי, תציג לי diff לפני שאתה משנה.
-לאחר היישום — כתוב unit tests לפי תכנית הבדיקות, הרץ smoke tests, ובצע code review checklist לפני שאתה מדווח שסיימת.
+אני עובד על ${project.name} (${project.stack.join(", ")}).
+[תאר כאן את השלב הראשון במשפט אחד-שניים, כולל איפה לקרוא ומה לשנות]
+תקרא את הקוד הרלוונטי, הצג diff לפני ביצוע, וכתוב unit test לכל שינוי.
 \`\`\``;
 
-  const userMessage = `Source articles (in chronological order, newest last):
-
-${articleBlocks}`;
+  const userMessage = `ARTICLE: ${article.title}
+SOURCE: ${source}
+TLDR: ${article.summary?.tldr ?? ""}
+KEY IDEAS:
+${keyIdeas}${gapBlock}`;
 
   const response = await getClient().messages.create({
     model: MODEL,
-    max_tokens: 8000,
+    max_tokens: IMPL_MAX_TOKENS,
     system,
     messages: [{ role: "user", content: userMessage }],
   });
 
-  const block = response.content[0];
-  if (!block || block.type !== "text") {
-    throw new Error("Unexpected response shape from Claude");
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `Implementation plan for "${article.title}" hit the token limit — cannot return a truncated plan. Reduce article scope or contact support.`,
+    );
   }
-  return block.text.trim();
+
+  const block = response.content[0];
+  if (!block || block.type !== "text") throw new Error("Unexpected response from Claude");
+
+  return {
+    text: block.text.trim(),
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
+}
+
+export async function planArticleQA(
+  project: ProjectConfig,
+  article: Article,
+): Promise<ArticlePlan> {
+  const lang = codeLanguage(project.stack);
+  const keyIdeas = article.summary?.keyIdeas.map((k) => `  - ${k}`).join("\n") ?? "";
+  const gapBlock = article.gapAnalysis?.text
+    ? `\nGAP ANALYSIS:\n${article.gapAnalysis.text}`
+    : "";
+
+  const system = `You are writing a complete QA & testing plan. This document is for a QA agent — not the developer. It must be 100% complete and actionable, never truncated or summarised.
+
+PROJECT: ${project.name}
+STACK: ${project.stack.join(", ")}
+
+RULES:
+- Respond in HEBREW. Use English for code identifiers, test names, CLI commands.
+- Be specific to this article's proposed changes. No generic filler.
+- COMPLETE every section without exception.
+- Length: 300–500 words.
+
+STRUCTURE — follow exactly:
+
+# תכנית QA — ${article.title}
+
+## מה נבדק
+1–2 משפטים: אילו שינויים יש לאמת.
+
+## בדיקות יחידה (Unit Tests)
+**פונקציה / מודול:** \`...\`
+**קייסים:** happy path | edge case | שגיאה
+\`\`\`${lang}
+// דוגמת unit test — 5–10 שורות
+\`\`\`
+
+## בדיקות עשן (Smoke Tests)
+- [ ] [בדיקה 1 — מה בדיוק לוודא]
+- [ ] [בדיקה 2]
+- [ ] [בדיקה 3]
+
+## בדיקות אבטחה
+- [ ] [בדיקה ספציפית לשינוי — לא generic]
+- [ ] [בדיקה נוספת]
+
+## סקירת קוד — Checklist
+- [ ] אין רגרסיות בפונקציונליות קיימת
+- [ ] טיפוסים נכונים (strict mode)
+- [ ] אין חשיפת secrets
+- [ ] error handling ב-boundaries
+- [ ] ולידציה של כל input חיצוני
+
+## קריטריון הצלחה
+✅ [משפט אחד — מתי ה-QA עובר]`;
+
+  const userMessage = `ARTICLE: ${article.title}
+TLDR: ${article.summary?.tldr ?? ""}
+KEY IDEAS:
+${keyIdeas}${gapBlock}`;
+
+  const response = await getClient().messages.create({
+    model: MODEL,
+    max_tokens: QA_MAX_TOKENS,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `QA plan for "${article.title}" hit the token limit — cannot return a truncated plan.`,
+    );
+  }
+
+  const block = response.content[0];
+  if (!block || block.type !== "text") throw new Error("Unexpected response from Claude");
+
+  return {
+    text: block.text.trim(),
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
 }
 
 export async function analyzeGap(
