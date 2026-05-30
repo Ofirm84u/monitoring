@@ -68,36 +68,65 @@ export default function ProjectPlanPage({ params }: { params: Promise<{ id: stri
 
   useEffect(() => { fetchArticlesAndProject(); }, [fetchArticlesAndProject]);
 
+  const [currentlyGenerating, setCurrentlyGenerating] = useState<number | null>(null);
+
+  // Calls the API once per article and appends results one by one as they arrive.
   const runPhase = useCallback(async (startIndex: number, append: boolean) => {
     setGenerating(true);
     setError(null);
+    if (!append) setPlans([]);
+
+    let idx = startIndex;
+    let total = 0;
+
     try {
-      const res = await fetch(`/api/projects/${id}/plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startIndex }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(j?.error ?? `HTTP ${res.status}`);
+      while (true) {
+        setCurrentlyGenerating(idx);
+        const res = await fetch(`/api/projects/${id}/plan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startIndex: idx }),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => null) as { error?: string } | null;
+          throw new Error(j?.error ?? `HTTP ${res.status}`);
+        }
+        const j = await res.json() as {
+          plan: ArticlePlanResult;
+          totalArticles: number;
+          hasMore: boolean;
+          nextStartIndex: number | null;
+          generatedAt: string;
+        };
+
+        total = j.totalArticles;
+        setTotalArticles(j.totalArticles);
+        setGeneratedAt(j.generatedAt);
+        setPlans((prev) => [...prev, j.plan]);
+
+        if (!j.hasMore || j.nextStartIndex === null) {
+          setHasMore(false);
+          setNextStartIndex(null);
+          break;
+        }
+
+        // Check token budget: stop and ask permission if we've done 4+ articles in this phase
+        const doneInPhase = idx - startIndex + 1;
+        if (doneInPhase >= 4) {
+          setHasMore(true);
+          setNextStartIndex(j.nextStartIndex);
+          break;
+        }
+
+        idx = j.nextStartIndex;
       }
-      const j = await res.json() as {
-        plans: ArticlePlanResult[];
-        totalArticles: number;
-        hasMore: boolean;
-        nextStartIndex: number | null;
-        generatedAt: string;
-      };
-      setPlans((prev) => append ? [...prev, ...j.plans] : j.plans);
-      setTotalArticles(j.totalArticles);
-      setHasMore(j.hasMore);
-      setNextStartIndex(j.nextStartIndex);
-      setGeneratedAt(j.generatedAt);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Plan generation failed");
     } finally {
       setGenerating(false);
+      setCurrentlyGenerating(null);
     }
+    void total;
   }, [id]);
 
   const tabFor = (idx: number): PlanTab => activeTab[idx] ?? "impl";
@@ -173,7 +202,9 @@ export default function ProjectPlanPage({ params }: { params: Promise<{ id: stri
             className="px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-2"
           >
             {generating && <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>}
-            {generating ? "Generating phase..." : plans.length > 0 ? "🔄 Restart from Phase 1" : "✨ Generate plans"}
+            {generating
+              ? `Generating article ${(currentlyGenerating ?? 0) + 1} of ${totalArticles || articles.length}...`
+              : plans.length > 0 ? "🔄 Restart from Phase 1" : "✨ Generate plans"}
           </button>
         </div>
       </div>
@@ -189,8 +220,8 @@ export default function ProjectPlanPage({ params }: { params: Promise<{ id: stri
               const isDone = plans.some((p) => p.articleIndex === i);
               return (
                 <li key={a.id} className="flex items-start gap-2 text-sm text-slate-700">
-                  <span className={`font-mono text-xs mt-0.5 shrink-0 ${isDone ? "text-emerald-500" : "text-slate-400"}`}>
-                    {isDone ? "✓" : `${i + 1}.`}
+                  <span className={`font-mono text-xs mt-0.5 shrink-0 ${isDone ? "text-emerald-500" : currentlyGenerating === i ? "text-indigo-500" : "text-slate-400"}`}>
+                    {isDone ? "✓" : currentlyGenerating === i ? "⟳" : `${i + 1}.`}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{a.title}</p>

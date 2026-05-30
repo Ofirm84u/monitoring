@@ -87,63 +87,47 @@ export async function POST(request: Request, { params }: RouteContext) {
   }
 
   const codeContext = await loadProjectCodeContext(project.id);
-  const results: ArticlePlanResult[] = [];
-  let totalOutputTokens = 0;
-  let i = startIndex;
+  // Process exactly ONE article per request to stay within Caddy's proxy timeout.
+  // The frontend calls this endpoint once per article and accumulates results.
+  const article = projectArticles[startIndex];
 
-  while (i < projectArticles.length) {
-    const remaining = PHASE_OUTPUT_BUDGET - totalOutputTokens;
-    if (remaining < MIN_TOKENS_PER_ARTICLE) break;
+  let implPlan: Awaited<ReturnType<typeof planArticleImplementation>>;
+  let qaPlan: Awaited<ReturnType<typeof planArticleQA>>;
 
-    const article = projectArticles[i];
-
-    try {
-      // Run impl and QA in parallel — they don't depend on each other
-      const [implPlan, qaPlan] = await Promise.all([
-        planArticleImplementation(project, article, codeContext),
-        planArticleQA(project, article),
-      ]);
-
-      const articleTokens = implPlan.outputTokens + qaPlan.outputTokens;
-      totalOutputTokens += articleTokens;
-
-      results.push({
-        articleIndex: i,
-        articleTitle: article.title,
-        implementationPlan: implPlan.text,
-        qaPlan: qaPlan.text,
-        outputTokensUsed: articleTokens,
-      });
-
-      // Persist plan marker to the article so the articles list can show the badge
-      await updateArticle(article.id, {
-        implementationPlan: {
-          projectId: project.id,
-          generatedAt: new Date().toISOString(),
-        },
-      });
-    } catch (err) {
-      return json(502, {
-        error: err instanceof Error ? err.message : "Plan generation failed",
-        completedCount: i,
-        partialPlans: results,
-      });
-    }
-
-    i++;
+  try {
+    [implPlan, qaPlan] = await Promise.all([
+      planArticleImplementation(project, article, codeContext),
+      planArticleQA(project, article),
+    ]);
+  } catch (err) {
+    return json(502, {
+      error: err instanceof Error ? err.message : "Plan generation failed",
+    });
   }
 
-  const hasMore = i < projectArticles.length;
+  await updateArticle(article.id, {
+    implementationPlan: {
+      projectId: project.id,
+      generatedAt: new Date().toISOString(),
+    },
+  });
+
+  const nextIndex = startIndex + 1;
+  const hasMore = nextIndex < projectArticles.length;
 
   return json(200, {
     project: { id: project.id, name: project.name, stack: project.stack },
-    plans: results,
+    plan: {
+      articleIndex: startIndex,
+      articleTitle: article.title,
+      implementationPlan: implPlan.text,
+      qaPlan: qaPlan.text,
+      outputTokensUsed: implPlan.outputTokens + qaPlan.outputTokens,
+    } satisfies ArticlePlanResult,
     totalArticles: projectArticles.length,
     startIndex,
-    completedCount: i,
     hasMore,
-    nextStartIndex: hasMore ? i : null,
-    totalOutputTokens,
+    nextStartIndex: hasMore ? nextIndex : null,
     generatedAt: new Date().toISOString(),
   });
 }
