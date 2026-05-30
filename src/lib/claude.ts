@@ -257,7 +257,7 @@ ${articleBlocks}`;
 
   const response = await getClient().messages.create({
     model: MODEL,
-    max_tokens: 6000,
+    max_tokens: 8000,
     system,
     messages: [{ role: "user", content: userMessage }],
   });
