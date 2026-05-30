@@ -5,6 +5,7 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { listArticles } from "@/lib/articles";
 import { PROJECTS } from "@/lib/projects";
 import { planArticleImplementation, planArticleQA } from "@/lib/claude";
+import { updateArticle } from "@/lib/articles";
 
 const RATE_LIMIT = { maxAttempts: 20, windowMs: 60 * 1000 };
 const MAX_CODE_CONTEXT_CHARS = 12_000;
@@ -112,6 +113,14 @@ export async function POST(request: Request, { params }: RouteContext) {
         implementationPlan: implPlan.text,
         qaPlan: qaPlan.text,
         outputTokensUsed: articleTokens,
+      });
+
+      // Persist plan marker to the article so the articles list can show the badge
+      await updateArticle(article.id, {
+        implementationPlan: {
+          projectId: project.id,
+          generatedAt: new Date().toISOString(),
+        },
       });
     } catch (err) {
       return json(502, {

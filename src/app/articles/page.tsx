@@ -35,6 +35,10 @@ interface Article {
     text: string;
     generatedAt: string;
   } | null;
+  implementationPlan?: {
+    projectId: string;
+    generatedAt: string;
+  } | null;
   error?: string;
 }
 
@@ -450,6 +454,25 @@ export default function ArticlesPage() {
                         #{t}
                       </span>
                     ))}
+                  </div>
+                )}
+
+                {/* Implementation plan badge */}
+                {article.implementationPlan?.projectId && (
+                  <div className="mt-2 mb-1">
+                    <Link
+                      href={`/projects/${article.implementationPlan.projectId}`}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-100 transition-colors"
+                      title={`Implementation plan generated ${new Date(article.implementationPlan.generatedAt).toLocaleString()}`}
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Implementation plan ready
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                      </svg>
+                    </Link>
                   </div>
                 )}
 

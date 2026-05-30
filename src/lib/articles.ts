@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, rename } from "fs/promises";
 import { randomBytes } from "crypto";
 
 const ARTICLES_FILE = process.env.ARTICLES_FILE ?? "/home/ofir/monitor/articles.json";
@@ -48,6 +48,10 @@ export interface Article {
     text: string;
     generatedAt: string;
   } | null;
+  implementationPlan?: {
+    projectId: string;
+    generatedAt: string;
+  } | null;
   error?: string;
 }
 
@@ -73,7 +77,9 @@ async function readStore(): Promise<ArticlesStore> {
 }
 
 async function writeStore(store: ArticlesStore): Promise<void> {
-  await writeFile(ARTICLES_FILE, JSON.stringify(store, null, 2), "utf-8");
+  const tmp = `${ARTICLES_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(store, null, 2), "utf-8");
+  await rename(tmp, ARTICLES_FILE);
 }
 
 export async function listArticles(): Promise<Article[]> {
