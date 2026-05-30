@@ -11,6 +11,7 @@ Telegram bot). Kept here for version control / disaster recovery.
 | `backup-freshness-check.sh` | `/home/ofir/scripts/backup-freshness-check.sh` |
 | `bizitis-pg-backup.sh` | `/home/ofir/bizitis/scripts/pg-backup-nightly.sh` |
 | `prdaily-files-backup.sh` | `/opt/prdaily/scripts/files-backup.sh` |
+| `crm-mati-pg-backup.sh` | `/home/ofir/crm-mati/scripts/pg-backup.sh` |
 
 ## Cron entries
 
@@ -25,6 +26,9 @@ Add to `crontab -e` on the VM:
 
 # Daily backup-freshness check + Telegram alert (10:00 UTC = 13:00 Israel)
 0 10 * * * /home/ofir/scripts/backup-freshness-check.sh >> /home/ofir/scripts/freshness.log 2>&1
+
+# CRM Mati nightly Postgres backup (03:00 UTC)
+0 3 * * * /home/ofir/crm-mati/scripts/pg-backup.sh >> /home/ofir/crm-mati/logs/backup.log 2>&1
 
 # Weekly Docker image prune (Sunday 04:30 UTC) — removes all unused images
 # Updated 2026-05-28: removed 30d filter; the filter barely freed anything since most unused images are recent
