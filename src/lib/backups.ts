@@ -62,8 +62,10 @@ function parseGsutil(output: string): {
   return { files, totalObjects, totalBytes };
 }
 
+const GSUTIL = "/snap/bin/gsutil";
+
 const SOURCES: Array<{ app: string; label: string; bucket: string }> = [
-  { app: "crm-mati", label: "CRM Mati", bucket: "gs://crm-mati-backups/" },
+  { app: "crm-mati", label: "CRM Mati", bucket: "gs://m84-backups/crm-mati/" },
   { app: "homeeye",  label: "HomeEye",  bucket: "gs://m84-backups/homeeye/" },
   { app: "seoapp",  label: "SEO App",  bucket: "gs://m84-backups/seoapp/" },
   { app: "beiteden", label: "Beit Eden", bucket: "gs://m84-backups/beiteden/" },
@@ -77,7 +79,7 @@ const SOURCES: Array<{ app: string; label: string; bucket: string }> = [
 export async function getBackupStatus(): Promise<BackupStatus> {
   const results = await Promise.all(
     SOURCES.map(async ({ app, label, bucket }): Promise<BackupInfo> => {
-      const { stdout, exitCode } = await execCommand(`gsutil ls -l ${bucket}`);
+      const { stdout, exitCode } = await execCommand(`${GSUTIL} ls -l ${bucket}`);
 
       if (exitCode !== 0 || !stdout.trim()) {
         return {
