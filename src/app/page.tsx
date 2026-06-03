@@ -900,6 +900,25 @@ export default function DashboardPage() {
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-slate-50">
+                  <td className="px-4 py-2.5 text-xs font-semibold text-slate-500" colSpan={3}>
+                    Total GCS volume
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-xs font-semibold text-slate-700">
+                    {(() => {
+                      const totalBytes = backupData.apps.reduce((s, b) => s + b.totalSizeBytes, 0);
+                      if (totalBytes === 0) return "—";
+                      if (totalBytes >= 1024 ** 3) return `${(totalBytes / 1024 ** 3).toFixed(2)} GB`;
+                      if (totalBytes >= 1024 ** 2) return `${(totalBytes / 1024 ** 2).toFixed(1)} MB`;
+                      return `${(totalBytes / 1024).toFixed(0)} KB`;
+                    })()}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-xs font-semibold text-slate-700">
+                    {backupData.apps.reduce((s, b) => s + b.totalObjects, 0)} files
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

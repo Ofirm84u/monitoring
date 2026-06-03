@@ -30,9 +30,9 @@ Add to `crontab -e` on the VM:
 # CRM Mati nightly Postgres backup (03:00 UTC)
 0 3 * * * /home/ofir/crm-mati/scripts/pg-backup.sh >> /home/ofir/crm-mati/logs/backup.log 2>&1
 
-# Weekly Docker image prune (Sunday 04:30 UTC) — removes all unused images
-# Updated 2026-05-28: removed 30d filter; the filter barely freed anything since most unused images are recent
-30 4 * * 0 docker image prune -a -f >> /home/ofir/monitoring/docker-prune.log 2>&1
+# Daily Docker image prune (04:30 UTC) — removes all unused images
+# Changed 2026-06-03: weekly wasn't enough — bizitis backup tags accumulate mid-week and fill disk
+30 4 * * * docker image prune -a -f >> /home/ofir/monitoring/docker-prune.log 2>&1
 ```
 
 ## Dependencies
