@@ -174,6 +174,40 @@ def api_gap_analysis(article_id: str) -> dict:
     return resp.json()["article"]
 
 
+def api_gap_analysis_for_project(article_id: str, project_id: str) -> str:
+    """Run gap analysis for an explicit project, returns the gap text."""
+    resp = requests.post(
+        f"{API_URL}/api/articles/{article_id}/gap-analysis",
+        headers=_api_headers(),
+        json={"projectId": project_id},
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    article = resp.json()["article"]
+    return (article.get("gapAnalysis") or {}).get("text") or ""
+
+
+def api_activate(article_id: str) -> dict:
+    """Generate implementation plan + QA plan + create tasks for an assigned article."""
+    resp = requests.post(
+        f"{API_URL}/api/articles/{article_id}/activate",
+        headers=_api_headers(),
+        timeout=120,  # two parallel Claude calls — allow up to 2 min
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def api_list_articles() -> list[dict]:
+    resp = requests.get(
+        f"{API_URL}/api/articles",
+        headers=_api_headers(),
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json().get("articles", [])
+
+
 _projects_cache: list[dict] = []
 
 
@@ -258,28 +292,38 @@ def _summary_text(article: dict) -> str:
     return "\n".join(parts)
 
 
-def _build_assignment_keyboard(article: dict, page: int = 0) -> InlineKeyboardMarkup:
+def _build_assignment_keyboard(article: dict, selected_ids: list[str]) -> InlineKeyboardMarkup:
     suggestions = article.get("suggestions") or []
     article_id = article["id"]
+    selected_set = set(selected_ids)
 
     rows: list[list[InlineKeyboardButton]] = []
-    # AI-suggested projects (top 3) as primary buttons
     for s in suggestions[:3]:
+        pid = s["projectId"]
+        icon = "✅" if pid in selected_set else "⬜"
         rows.append([
             InlineKeyboardButton(
-                f"🎯 {s['projectName']} ({s['relevance']})",
-                callback_data=f"assign:{article_id}:{s['projectId']}",
+                f"{icon} {s['projectName']} ({s['relevance']})",
+                callback_data=f"toggle:{article_id}:{pid}",
             )
         ])
 
-    # Other projects page
     rows.append([
         InlineKeyboardButton(
             "🔽 Other project...",
             callback_data=f"other:{article_id}:0",
         )
     ])
-    # Standalone
+
+    if selected_ids:
+        n = len(selected_ids)
+        rows.append([
+            InlineKeyboardButton(
+                f"🔍 Analyze {n} project{'s' if n > 1 else ''}",
+                callback_data=f"rungap:{article_id}",
+            )
+        ])
+
     rows.append([
         InlineKeyboardButton(
             "💡 Standalone idea (no project)",
@@ -290,11 +334,12 @@ def _build_assignment_keyboard(article: dict, page: int = 0) -> InlineKeyboardMa
 
 
 def _build_other_projects_keyboard(
-    article_id: str, suggested_ids: set[str], page: int
+    article_id: str, suggested_ids: set[str], page: int, selected_ids: list[str]
 ) -> InlineKeyboardMarkup:
     projects = api_list_projects()
     others = [p for p in projects if p["id"] not in suggested_ids]
     others.sort(key=lambda p: p["name"].lower())
+    selected_set = set(selected_ids)
 
     page_size = 6
     start = page * page_size
@@ -303,33 +348,37 @@ def _build_other_projects_keyboard(
 
     rows: list[list[InlineKeyboardButton]] = []
     for p in page_items:
+        icon = "✅" if p["id"] in selected_set else "⬜"
         rows.append([
             InlineKeyboardButton(
-                p["name"],
-                callback_data=f"assign:{article_id}:{p['id']}",
+                f"{icon} {p['name']}",
+                callback_data=f"toggle:{article_id}:{p['id']}",
             )
         ])
 
     nav_row: list[InlineKeyboardButton] = []
     if start > 0:
         nav_row.append(
-            InlineKeyboardButton(
-                "← Prev", callback_data=f"other:{article_id}:{page - 1}"
-            )
+            InlineKeyboardButton("← Prev", callback_data=f"other:{article_id}:{page - 1}")
         )
     if end < len(others):
         nav_row.append(
-            InlineKeyboardButton(
-                "Next →", callback_data=f"other:{article_id}:{page + 1}"
-            )
+            InlineKeyboardButton("Next →", callback_data=f"other:{article_id}:{page + 1}")
         )
     if nav_row:
         rows.append(nav_row)
+
+    if selected_ids:
+        n = len(selected_ids)
+        rows.append([
+            InlineKeyboardButton(
+                f"🔍 Analyze {n} project{'s' if n > 1 else ''}",
+                callback_data=f"rungap:{article_id}",
+            )
+        ])
+
     rows.append([
-        InlineKeyboardButton(
-            "↩ Back",
-            callback_data=f"back:{article_id}",
-        )
+        InlineKeyboardButton("↩ Back", callback_data=f"back:{article_id}")
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -390,12 +439,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await _send_long(update, _summary_text(article))
     await msg.reply_text(
-        "Which project is this relevant to?",
-        reply_markup=_build_assignment_keyboard(article),
+        "Which project(s) is this relevant to? Select 1–3 for gap analysis.",
+        reply_markup=_build_assignment_keyboard(article, []),
     )
-    # Cache for callback (we only need the id + suggested_ids; refetched on assign)
     context.bot_data.setdefault("articles", {})[article["id"]] = {
         "suggested_ids": [s["projectId"] for s in article.get("suggestions", [])],
+        "suggestions": article.get("suggestions", []),
+        "selected_ids": [],
+        "view": "main",
     }
 
 
@@ -427,11 +478,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await _send_long(update, _summary_text(article))
     await update.message.reply_text(
-        "Which project is this relevant to?",
-        reply_markup=_build_assignment_keyboard(article),
+        "Which project(s) is this relevant to? Select 1–3 for gap analysis.",
+        reply_markup=_build_assignment_keyboard(article, []),
     )
     context.bot_data.setdefault("articles", {})[article["id"]] = {
         "suggested_ids": [s["projectId"] for s in article.get("suggestions", [])],
+        "suggestions": article.get("suggestions", []),
+        "selected_ids": [],
+        "view": "main",
     }
 
 
@@ -449,39 +503,91 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "assign" and len(parts) == 3:
         article_id, target = parts[1], parts[2]
+        if target != "__standalone__":
+            # Project assignments now go through rungap; this path is a no-op fallback.
+            return
         try:
-            if target == "__standalone__":
-                article = api_assign(article_id, "standalone", None)
-                await query.edit_message_text(
-                    "✅ Marked as a standalone idea (no project linkage)."
-                )
-            else:
-                article = api_assign(article_id, "project", target)
-                project_name = next(
-                    (
-                        p["name"]
-                        for p in api_list_projects()
-                        if p["id"] == target
-                    ),
-                    target,
-                )
-                await query.edit_message_text(
-                    f"✅ Assigned to *{project_name}*\n\n🔍 Running gap analysis...",
-                    parse_mode="Markdown",
-                )
-                # Run gap analysis
+            api_assign(article_id, "standalone", None)
+            await query.edit_message_text(
+                "✅ Marked as a standalone idea (no project linkage)."
+            )
+        except requests.HTTPError as exc:
+            try:
+                err = exc.response.json().get("error", str(exc))
+            except Exception:
+                err = str(exc)
+            await query.message.reply_text(f"❌ {err}")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+        return
+
+    if action == "toggle" and len(parts) == 3:
+        article_id, project_id = parts[1], parts[2]
+        cached = context.bot_data.setdefault("articles", {}).setdefault(article_id, {})
+        selected: list[str] = cached.setdefault("selected_ids", [])
+
+        if project_id in selected:
+            selected.remove(project_id)
+        elif len(selected) >= 3:
+            await query.answer("You can select up to 3 projects.", show_alert=True)
+            return
+        else:
+            selected.append(project_id)
+
+        view = cached.get("view", "main")
+        if view == "main":
+            article_stub = {"id": article_id, "suggestions": cached.get("suggestions", [])}
+            markup = _build_assignment_keyboard(article_stub, selected)
+        else:
+            suggested_ids = set(cached.get("suggested_ids", []))
+            page = cached.get("other_page", 0)
+            markup = _build_other_projects_keyboard(article_id, suggested_ids, page, selected)
+
+        await query.edit_message_reply_markup(reply_markup=markup)
+        return
+
+    if action == "rungap" and len(parts) == 2:
+        article_id = parts[1]
+        cached = context.bot_data.get("articles", {}).get(article_id) or {}
+        selected_ids = cached.get("selected_ids", [])
+
+        if not selected_ids:
+            await query.answer("No projects selected.", show_alert=True)
+            return
+
+        projects_map = {p["id"]: p["name"] for p in api_list_projects()}
+        first_id = selected_ids[0]
+        first_name = projects_map.get(first_id, first_id)
+        n = len(selected_ids)
+
+        await query.edit_message_text(
+            f"✅ Assigned to *{first_name}*\n\n🔍 Running gap analysis for {n} project{'s' if n > 1 else ''}...",
+            parse_mode="Markdown",
+        )
+        try:
+            api_assign(article_id, "project", first_id)
+            for pid in selected_ids:
+                pname = projects_map.get(pid, pid)
                 try:
-                    article = api_gap_analysis(article_id)
-                    gap = (article.get("gapAnalysis") or {}).get("text") or ""
-                    if gap:
+                    gap_text = api_gap_analysis_for_project(article_id, pid)
+                    if gap_text:
                         await _send_long(
                             query.message,
-                            f"🔍 *Gap analysis — {project_name}*\n\n{gap}",
+                            f"🔍 *Gap analysis — {pname}*\n\n{gap_text}",
                         )
                 except Exception as gap_exc:
-                    await query.message.reply_text(
-                        f"⚠️ Gap analysis failed: {gap_exc}"
+                    await query.message.reply_text(f"⚠️ Gap analysis for {pname} failed: {gap_exc}")
+            # Offer activation after all gap analyses complete
+            await query.message.reply_text(
+                f"💡 Gap analysis done\\. Ready to activate into *{first_name}*?",
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "⚡ Activate — generate plan + tasks",
+                        callback_data=f"activate:{article_id}",
                     )
+                ]]),
+            )
         except requests.HTTPError as exc:
             try:
                 err = exc.response.json().get("error", str(exc))
@@ -498,12 +604,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             page = int(page_str)
         except ValueError:
             page = 0
-        cached = context.bot_data.get("articles", {}).get(article_id) or {}
+        cached = context.bot_data.setdefault("articles", {}).setdefault(article_id, {})
+        cached["view"] = "other"
+        cached["other_page"] = page
         suggested_ids = set(cached.get("suggested_ids", []))
+        selected_ids = cached.get("selected_ids", [])
         await query.edit_message_reply_markup(
-            reply_markup=_build_other_projects_keyboard(
-                article_id, suggested_ids, page
-            )
+            reply_markup=_build_other_projects_keyboard(article_id, suggested_ids, page, selected_ids)
         )
         return
 
@@ -524,39 +631,38 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.message.reply_text(f"❌ {exc}")
         return
 
+    if action == "activate" and len(parts) == 2:
+        article_id = parts[1]
+        await query.message.reply_text("⚡ Generating implementation plan + QA plan and creating tasks… (~20s)")
+        try:
+            result = api_activate(article_id)
+            await _send_long(query.message, f"📋 *Implementation Plan*\n\n{result['implementationPlan']}")
+            await _send_long(query.message, f"🧪 *QA Plan*\n\n{result['qaPlan']}")
+            tasks = result.get("tasksCreated", [])
+            if tasks:
+                tasks_text = "\n".join(f"• {t['text']}" for t in tasks)
+                await query.message.reply_text(
+                    f"✅ Created {len(tasks)} task{'s' if len(tasks) != 1 else ''}:\n{tasks_text}"
+                )
+        except requests.HTTPError as exc:
+            try:
+                err = exc.response.json().get("error", str(exc))
+            except Exception:
+                err = str(exc)
+            await query.message.reply_text(f"❌ Activation failed: {err}")
+        except Exception as exc:
+            await query.message.reply_text(f"❌ Activation failed: {exc}")
+        return
+
     if action == "back" and len(parts) == 2:
         article_id = parts[1]
-        # Reconstruct keyboard from cache only (suggestions list is small; reconstructed minimal)
-        cached = context.bot_data.get("articles", {}).get(article_id) or {}
-        suggested_ids = cached.get("suggested_ids", [])
-        # We don't have the full suggestion objects cached; recreate keyboard with just
-        # standalone + other + a minimal "suggested" hint. For simplicity, fall back to other-list page 0.
-        rows: list[list[InlineKeyboardButton]] = []
-        for sid in suggested_ids[:3]:
-            project_name = next(
-                (p["name"] for p in api_list_projects() if p["id"] == sid),
-                sid,
-            )
-            rows.append([
-                InlineKeyboardButton(
-                    f"🎯 {project_name}",
-                    callback_data=f"assign:{article_id}:{sid}",
-                )
-            ])
-        rows.append([
-            InlineKeyboardButton(
-                "🔽 Other project...",
-                callback_data=f"other:{article_id}:0",
-            )
-        ])
-        rows.append([
-            InlineKeyboardButton(
-                "💡 Standalone idea (no project)",
-                callback_data=f"assign:{article_id}:__standalone__",
-            )
-        ])
+        cached = context.bot_data.setdefault("articles", {}).setdefault(article_id, {})
+        cached["view"] = "main"
+        suggestions = cached.get("suggestions", [])
+        selected_ids = cached.get("selected_ids", [])
+        article_stub = {"id": article_id, "suggestions": suggestions}
         await query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup(rows)
+            reply_markup=_build_assignment_keyboard(article_stub, selected_ids)
         )
         return
 
@@ -671,12 +777,54 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"❌ {exc}")
 
 
+async def cmd_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List articles that have a gap analysis but no implementation plan yet."""
+    if ALLOWED_USER_ID and (update.effective_user is None or update.effective_user.id != ALLOWED_USER_ID):
+        return
+    try:
+        articles = api_list_articles()
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Could not fetch articles: {exc}")
+        return
+
+    ready = [
+        a for a in articles
+        if a.get("assignment", {}) and a["assignment"].get("kind") == "project"
+        and a.get("gapAnalysis")
+        and not a.get("implementationPlan")
+    ]
+
+    if not ready:
+        await update.message.reply_text(
+            "✅ All assigned articles already have implementation plans, "
+            "or none have a gap analysis yet."
+        )
+        return
+
+    projects_map = {p["id"]: p["name"] for p in api_list_projects()}
+    buttons = []
+    for a in ready[:10]:  # cap at 10 to avoid oversized keyboard
+        pid = a["assignment"].get("projectId", "")
+        pname = projects_map.get(pid, pid)
+        title = a.get("title", a["id"])
+        label = f"📄 {title[:40]}{'…' if len(title) > 40 else ''} ({pname})"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"activate:{a['id']}")])
+
+    await update.message.reply_text(
+        f"💡 *{len(ready)} article{'s' if len(ready) != 1 else ''} ready to activate* "
+        f"(tap one to generate plan + tasks):",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
 async def post_init(app: Application) -> None:
     await app.bot.set_my_commands([
         BotCommand("start", "Introduction & help"),
+        BotCommand("plans", "Activate ideas — generate plan + tasks"),
         BotCommand("task", "Add a new task: /task <description>"),
         BotCommand("tasks", "Show open tasks"),
         BotCommand("done", "Mark task complete: /done <number>"),
@@ -689,6 +837,7 @@ def main() -> None:
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("whoami", cmd_whoami))
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("plans", cmd_plans))
     app.add_handler(CommandHandler("task", cmd_task))
     app.add_handler(CommandHandler("tasks", cmd_tasks))
     app.add_handler(CommandHandler("done", cmd_done))
