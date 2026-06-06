@@ -81,12 +81,11 @@ export async function POST(request: Request, { params }: RouteContext) {
     });
   }
 
-  // Create one task per key idea
-  const tasksCreated = await Promise.all(
-    (article.summary.keyIdeas ?? []).map((idea) =>
-      createTask(idea, projectId),
-    ),
-  );
+  // Create one task per key idea — sequential to avoid concurrent writes to tasks.json.tmp
+  const tasksCreated = [];
+  for (const idea of article.summary.keyIdeas ?? []) {
+    tasksCreated.push(await createTask(idea, projectId));
+  }
 
   // Mark the article as having an implementation plan
   await updateArticle(id, {
