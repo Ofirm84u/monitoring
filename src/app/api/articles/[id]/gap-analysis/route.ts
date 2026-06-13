@@ -53,17 +53,27 @@ export async function POST(request: Request, { params }: RouteContext) {
   const article = await getArticle(id);
   if (!article) return json(404, { error: "Article not found" });
 
-  if (
-    !article.assignment ||
-    article.assignment.kind !== "project" ||
-    !article.assignment.projectId
-  ) {
-    return json(400, {
-      error: "Article must be assigned to a project before gap analysis",
-    });
+  const body = await request.json().catch(() => ({}));
+  const overrideProjectId: string | undefined =
+    typeof body?.projectId === "string" ? body.projectId : undefined;
+
+  let projectId: string;
+  if (overrideProjectId) {
+    projectId = overrideProjectId;
+  } else {
+    if (
+      !article.assignment ||
+      article.assignment.kind !== "project" ||
+      !article.assignment.projectId
+    ) {
+      return json(400, {
+        error: "Article must be assigned to a project before gap analysis",
+      });
+    }
+    projectId = article.assignment.projectId;
   }
 
-  const project = PROJECTS.find((p) => p.id === article.assignment!.projectId);
+  const project = PROJECTS.find((p) => p.id === projectId);
   if (!project) {
     return json(400, { error: "Assigned project no longer exists" });
   }
@@ -73,7 +83,7 @@ export async function POST(request: Request, { params }: RouteContext) {
     return json(400, { error: "Article has no text content stored" });
   }
 
-  const codeContext = await loadProjectCodeContext(project.id);
+  const codeContext = await loadProjectCodeContext(projectId);
 
   let gapText: string;
   try {

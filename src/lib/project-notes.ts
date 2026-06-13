@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, rename } from "fs/promises";
 
 const NOTES_FILE = process.env.NOTES_FILE ?? "/home/ofir/monitor/project-notes.json";
 
@@ -24,6 +24,8 @@ export async function readNotes(): Promise<NotesMap> {
 export async function writeNote(id: string, note: ProjectNote): Promise<NotesMap> {
   const notes = await readNotes();
   notes[id] = note;
-  await writeFile(NOTES_FILE, JSON.stringify(notes, null, 2), "utf-8");
+  const tmp = `${NOTES_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(notes, null, 2), "utf-8");
+  await rename(tmp, NOTES_FILE);
   return notes;
 }

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, rename } from "fs/promises";
 import { randomUUID } from "crypto";
 
 const TASKS_FILE = process.env.TASKS_FILE ?? "/home/ofir/monitor/tasks.json";
@@ -21,7 +21,9 @@ export async function readTasks(): Promise<Task[]> {
 }
 
 async function writeTasks(tasks: Task[]): Promise<void> {
-  await writeFile(TASKS_FILE, JSON.stringify(tasks, null, 2), "utf-8");
+  const tmp = `${TASKS_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(tasks, null, 2), "utf-8");
+  await rename(tmp, TASKS_FILE);
 }
 
 export async function createTask(text: string, projectId: string | null = null): Promise<Task> {
