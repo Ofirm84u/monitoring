@@ -8,3 +8,9 @@ node_modules
 .venv
 articles.json
 logs
+# PM Hub local SQLite (spike/dev)
+.data/
+*.db
+*.db-shm
+*.db-wal
+.env.spike

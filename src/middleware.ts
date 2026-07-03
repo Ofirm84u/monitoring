@@ -1,49 +1,63 @@
+import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { authConfig } from "@/auth.config";
 
-// Public routes that don't require authentication
-const PUBLIC_ROUTES = ["/login", "/api/auth/login", "/api/alert"];
+/**
+ * Edge auth instance built from the adapter-free config (C1): reading the JWT
+ * session at the edge needs no database, so no native module reaches the Edge
+ * bundle. Route handlers use the Node instance from `@/auth` for real work.
+ */
+const { auth } = NextAuth(authConfig);
 
-export function middleware(request: NextRequest) {
+/**
+ * Public routes that skip the auth gate. PM Hub API routes enforce their own
+ * auth downstream (Auth.js session or bot+telegram-id via getRequestUser), and
+ * Auth.js's own endpoints must be reachable while signed out.
+ */
+const PUBLIC_ROUTES = [
+  "/login",
+  "/api/auth/login", // legacy password login (break-glass)
+  "/api/alert",
+  "/api/auth", // Auth.js (NextAuth) handlers, incl. Google callback
+  "/api/spike", // PM Hub spike routes (self-authenticated)
+];
+
+export default auth((request) => {
   const { pathname } = request.nextUrl;
 
-  // Allow public routes through
   const isPublic = PUBLIC_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(route + "/"),
   );
 
   if (!isPublic) {
-    // Check session cookie exists and has a value
-    // (full cryptographic verification happens in isAuthenticated() on API routes)
-    const session = request.cookies.get("mon_session");
-    const hasSession = !!session?.value && session.value.length >= 64;
-    // Allow API requests carrying a bot token through to the handler,
-    // which performs the actual token verification.
+    // Primary: a valid Auth.js (Google) JWT session, decoded here at the edge.
+    const hasAuthSession = !!request.auth;
+    // Break-glass: the legacy password session cookie. Retained until the live
+    // Google roundtrip is proven (pre-mortem #6); real verification still runs
+    // in isAuthenticated() on the route.
+    const legacy = request.cookies.get("mon_session");
+    const hasLegacy = !!legacy?.value && legacy.value.length >= 64;
+    // Bots authenticate per-request; the handler verifies the token itself.
     const hasBotToken =
       pathname.startsWith("/api/") && !!request.headers.get("x-bot-token");
-    if (!hasSession && !hasBotToken) {
+
+    if (!hasAuthSession && !hasLegacy && !hasBotToken) {
       if (pathname.startsWith("/api/")) {
         return new NextResponse(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,
-          headers: {
-            "Content-Type": "application/json",
-            ...securityHeaders(),
-          },
+          headers: { "Content-Type": "application/json", ...securityHeaders() },
         });
       }
       return NextResponse.redirect(new URL("/login", request.url));
     }
   }
 
-  // Add security headers to all responses
   const response = NextResponse.next();
-  const headers = securityHeaders();
-  for (const [key, value] of Object.entries(headers)) {
+  for (const [key, value] of Object.entries(securityHeaders())) {
     response.headers.set(key, value);
   }
-
   return response;
-}
+});
 
 function securityHeaders(): Record<string, string> {
   return {
@@ -52,8 +66,9 @@ function securityHeaders(): Record<string, string> {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    // img-src allows Google profile avatars from googleusercontent (NFR-SEC-7).
     "Content-Security-Policy":
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; font-src 'self'; connect-src 'self'; frame-ancestors 'none'",
   };
 }
 

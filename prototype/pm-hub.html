@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PM Hub — Prototype</title>
+<style>
+  /* ---- Design tokens (dark theme, monitoring-app aesthetic) ---- */
+  :root {
+    --bg:#0b0f17; --bg-1:#111726; --bg-2:#161e30; --bg-3:#1c2740;
+    --line:#243049; --line-2:#2e3c5c;
+    --txt:#e6ebf5; --txt-dim:#9aa7c2; --txt-mut:#6b7896;
+    --accent:#6366f1; --accent-2:#818cf8;
+    --green:#10b981; --amber:#f59e0b; --red:#ef4444; --blue:#3b82f6; --violet:#a78bfa;
+    --radius:12px; --radius-sm:8px;
+    --area-work:#3b82f6; --area-personal:#10b981; --area-health:#a78bfa; --area-side:#f59e0b;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--txt); font-size:14px; line-height:1.45; overflow:hidden;
+  }
+  button { font:inherit; color:inherit; cursor:pointer; border:none; background:none; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+
+  /* ---- App shell: nav rail | list pane | detail pane ---- */
+  .app { display:grid; grid-template-columns:228px 340px 1fr; height:100vh; }
+
+  /* Nav rail */
+  .rail { background:var(--bg-1); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  .brand { display:flex; align-items:center; gap:10px; padding:16px 18px; border-bottom:1px solid var(--line); }
+  .brand .logo { width:26px; height:26px; border-radius:7px; background:linear-gradient(135deg,var(--accent),var(--violet)); display:grid; place-items:center; font-weight:800; font-size:14px; }
+  .brand b { font-size:15px; letter-spacing:.2px; }
+  .nav { padding:10px 10px; flex:1; overflow:auto; }
+  .nav .grp { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--txt-mut); padding:14px 10px 6px; }
+  .nav button.item { width:100%; display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:var(--radius-sm); color:var(--txt-dim); text-align:left; }
+  .nav button.item:hover { background:var(--bg-2); color:var(--txt); }
+  .nav button.item.active { background:var(--bg-3); color:#fff; }
+  .nav .ic { width:18px; text-align:center; opacity:.9; font-size:15px; }
+  .nav .count { margin-left:auto; font-size:11px; color:var(--txt-mut); background:var(--bg-2); padding:1px 7px; border-radius:10px; }
+  .nav button.item.active .count { background:var(--accent); color:#fff; }
+  .acct { border-top:1px solid var(--line); padding:12px 14px; display:flex; align-items:center; gap:10px; }
+  .avatar { width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#22d3ee,#6366f1); display:grid; place-items:center; font-weight:700; font-size:12px; }
+  .acct .who { font-size:12px; line-height:1.2; }
+  .acct .who small { color:var(--txt-mut); }
+  .acct .out { margin-left:auto; color:var(--txt-mut); font-size:16px; }
+
+  /* List pane */
+  .list { background:var(--bg); border-right:1px solid var(--line); display:flex; flex-direction:column; min-width:0; }
+  .list .lhead { padding:16px 16px 10px; border-bottom:1px solid var(--line); }
+  .list .lhead h2 { margin:0 0 10px; font-size:17px; display:flex; align-items:center; gap:8px; }
+  .filters { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { font-size:12px; padding:4px 11px; border-radius:20px; background:var(--bg-2); color:var(--txt-dim); border:1px solid transparent; }
+  .chip:hover { color:var(--txt); }
+  .chip.on { background:var(--bg-3); color:#fff; border-color:var(--line-2); }
+  .chip .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .lbody { overflow:auto; flex:1; padding:8px 8px 24px; }
+  .sec-label { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--txt-mut); padding:14px 10px 6px; display:flex; align-items:center; gap:8px; }
+  .sec-label.warn { color:var(--amber); }
+
+  .row { display:flex; align-items:flex-start; gap:10px; padding:10px 10px; border-radius:var(--radius-sm); cursor:pointer; }
+  .row:hover { background:var(--bg-1); }
+  .row.sel { background:var(--bg-2); outline:1px solid var(--line-2); }
+  .cbox { width:18px; height:18px; border-radius:5px; border:1.5px solid var(--line-2); margin-top:1px; flex:none; display:grid; place-items:center; font-size:11px; color:transparent; }
+  .row.done .cbox { background:var(--green); border-color:var(--green); color:#04130d; }
+  .row.done .rtext { text-decoration:line-through; color:var(--txt-mut); }
+  .rmain { min-width:0; flex:1; }
+  .rtext { font-size:13.5px; }
+  .rmeta { display:flex; gap:7px; flex-wrap:wrap; margin-top:5px; align-items:center; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:6px; background:var(--bg-3); color:var(--txt-dim); display:inline-flex; align-items:center; gap:4px; }
+  .tag.area { color:#fff; }
+  .pri { font-size:11px; padding:2px 7px; border-radius:6px; font-weight:600; }
+  .pri.urgent { background:rgba(239,68,68,.16); color:#fca5a5; }
+  .pri.high { background:rgba(245,158,11,.16); color:#fcd34d; }
+  .pri.medium { background:rgba(59,130,246,.16); color:#93c5fd; }
+  .pri.low { background:rgba(148,163,184,.14); color:#cbd5e1; }
+  .due { font-size:11px; color:var(--txt-mut); }
+  .due.over { color:#fca5a5; }
+
+  /* Detail pane */
+  .detail { overflow:auto; min-width:0; background:var(--bg); }
+  .dwrap { padding:22px 26px; max-width:860px; }
+  .topbar { display:flex; align-items:center; gap:12px; padding:12px 24px; border-bottom:1px solid var(--line); background:var(--bg-1); position:sticky; top:0; z-index:5; }
+  .topbar .sp { flex:1; }
+  .btn { background:var(--accent); color:#fff; padding:8px 14px; border-radius:var(--radius-sm); font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:7px; }
+  .btn:hover { background:var(--accent-2); }
+  .btn.ghost { background:var(--bg-3); color:var(--txt); }
+  .btn.ghost:hover { background:var(--line-2); }
+  .btn.sm { padding:5px 10px; font-size:12px; }
+
+  .crumbs { font-size:12px; color:var(--txt-mut); margin-bottom:6px; }
+  .dtitle { font-size:24px; font-weight:700; margin:0 0 6px; display:flex; align-items:center; gap:10px; }
+  .badge { font-size:12px; padding:3px 10px; border-radius:20px; font-weight:600; }
+  .st-planning { background:rgba(148,163,184,.16); color:#cbd5e1; }
+  .st-active { background:rgba(16,185,129,.16); color:#6ee7b7; }
+  .st-blocked { background:rgba(239,68,68,.16); color:#fca5a5; }
+  .st-done { background:rgba(99,102,241,.16); color:#c7d2fe; }
+  .dsub { color:var(--txt-dim); font-size:13px; margin-bottom:20px; display:flex; gap:14px; flex-wrap:wrap; }
+  .dsub b { color:var(--txt); font-weight:600; }
+
+  .card { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:16px; }
+  .card h3 { margin:0 0 12px; font-size:14px; display:flex; align-items:center; gap:8px; }
+  .card h3 .add { margin-left:auto; font-size:12px; color:var(--accent-2); }
+  .mile, .person, .member, .ltask { display:flex; align-items:center; gap:11px; padding:9px 4px; border-bottom:1px solid var(--line); }
+  .mile:last-child,.person:last-child,.member:last-child,.ltask:last-child { border-bottom:none; }
+  .mile .ttl { flex:1; } .mile.done .ttl { text-decoration:line-through; color:var(--txt-mut); }
+  .pill { font-size:11px; padding:2px 9px; border-radius:20px; background:var(--bg-3); color:var(--txt-dim); }
+  .pill.owner { background:rgba(99,102,241,.18); color:#c7d2fe; }
+  .pill.editor { background:rgba(16,185,129,.16); color:#6ee7b7; }
+  .pill.viewer { background:rgba(148,163,184,.16); color:#cbd5e1; }
+  .pill.pending { background:rgba(245,158,11,.16); color:#fcd34d; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .av-sm { width:26px; height:26px; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:700; flex:none; }
+
+  /* Kanban board */
+  .board { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .col { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius); padding:10px; min-height:200px; }
+  .col h4 { margin:2px 4px 10px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--txt-mut); display:flex; }
+  .col h4 .c { margin-left:auto; }
+  .pcard { background:var(--bg-2); border:1px solid var(--line); border-radius:var(--radius-sm); padding:11px; margin-bottom:9px; cursor:pointer; }
+  .pcard:hover { border-color:var(--line-2); background:var(--bg-3); }
+  .pcard .pn { font-weight:600; font-size:13px; margin-bottom:8px; }
+  .pcard .pm { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .mini-bar { height:5px; border-radius:4px; background:var(--bg-3); margin-top:9px; overflow:hidden; }
+  .mini-bar > span { display:block; height:100%; background:var(--accent); }
+
+  /* Calendar */
+  .cal { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+  .cal .ch { display:grid; grid-template-columns:repeat(7,1fr); background:var(--bg-2); }
+  .cal .ch div { padding:8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--txt-mut); text-align:center; }
+  .cal .cg { display:grid; grid-template-columns:repeat(7,1fr); }
+  .cell { min-height:96px; border-right:1px solid var(--line); border-top:1px solid var(--line); padding:6px; }
+  .cell:nth-child(7n) { border-right:none; }
+  .cell.dim { background:var(--bg); color:var(--txt-mut); }
+  .cell .dn { font-size:12px; color:var(--txt-dim); margin-bottom:5px; }
+  .cell.today .dn { color:#fff; background:var(--accent); width:22px; height:22px; border-radius:50%; display:grid; place-items:center; }
+  .ev { font-size:11px; padding:2px 6px; border-radius:5px; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ev.task { background:rgba(59,130,246,.18); color:#bfdbfe; }
+  .ev.ms { background:rgba(167,139,250,.2); color:#ddd6fe; }
+  .ev.urgent { background:rgba(239,68,68,.2); color:#fecaca; }
+
+  .empty { color:var(--txt-mut); text-align:center; padding:60px 20px; }
+  .empty .big { font-size:40px; opacity:.4; margin-bottom:10px; }
+  .note { font-size:12px; color:var(--txt-mut); }
+  .banner { background:linear-gradient(90deg,rgba(99,102,241,.14),rgba(167,139,250,.08)); border:1px solid var(--line-2); border-radius:var(--radius); padding:14px 16px; margin-bottom:16px; font-size:13px; color:var(--txt-dim); display:flex; gap:10px; align-items:center; }
+  .code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:var(--bg-3); padding:3px 9px; border-radius:6px; color:#fff; letter-spacing:1px; }
+  .proto-tag { position:fixed; bottom:12px; right:14px; font-size:11px; color:var(--txt-mut); background:var(--bg-1); border:1px solid var(--line); padding:5px 11px; border-radius:20px; z-index:50; }
+  .areas-list .arow { display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius-sm); margin-bottom:8px; }
+  .swatch { width:14px; height:14px; border-radius:4px; }
+  .switch { display:flex; gap:6px; }
+  .seg { display:inline-flex; background:var(--bg-2); border-radius:var(--radius-sm); padding:2px; }
+  .seg button { padding:5px 12px; border-radius:6px; font-size:12px; color:var(--txt-dim); }
+  .seg button.on { background:var(--bg-3); color:#fff; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ============ NAV RAIL ============ -->
+  <aside class="rail">
+    <div class="brand"><div class="logo">P</div><b>PM&nbsp;Hub</b></div>
+    <nav class="nav" id="nav">
+      <button class="item active" data-view="tasks"><span class="ic">✓</span> Tasks <span class="count">6</span></button>
+      <button class="item" data-view="projects"><span class="ic">▤</span> Projects <span class="count">5</span></button>
+      <button class="item" data-view="calendar"><span class="ic">▦</span> Calendar</button>
+      <button class="item" data-view="areas"><span class="ic">◧</span> Areas</button>
+      <button class="item" data-view="telegram"><span class="ic">✈</span> Link Telegram</button>
+      <div class="grp">Owner only</div>
+      <button class="item" data-view="articles"><span class="ic">📄</span> Articles <span class="count">12</span></button>
+      <button class="item" data-view="monitoring"><span class="ic">📊</span> Monitoring</button>
+    </nav>
+    <div class="acct">
+      <div class="avatar">OS</div>
+      <div class="who">Ofir Schwartz<br><small>Owner</small></div>
+      <button class="out" title="Sign out">⏻</button>
+    </div>
+  </aside>
+
+  <!-- ============ LIST PANE ============ -->
+  <section class="list" id="listPane"></section>
+
+  <!-- ============ DETAIL PANE ============ -->
+  <main class="detail">
+    <div class="topbar">
+      <div class="sp" id="topTitle" style="font-weight:600;color:var(--txt-dim)"></div>
+      <button class="btn ghost sm" id="syncBtn" style="display:none">⟳ Sync Google</button>
+      <button class="btn sm" id="addBtn">+ Add task</button>
+    </div>
+    <div id="detailPane"></div>
+  </main>
+</div>
+<div class="proto-tag">⬢ Prototype · mock data · no backend</div>
+
+<script>
+/* ===================== MOCK DATA ===================== */
+const AREAS = [
+  { id:'work', name:'Work', color:'var(--area-work)' },
+  { id:'personal', name:'Personal', color:'var(--area-personal)' },
+  { id:'health', name:'Health', color:'var(--area-health)' },
+  { id:'side', name:'Side-project', color:'var(--area-side)' },
+];
+const areaById = id => AREAS.find(a=>a.id===id);
+
+const PROJECTS = [
+  { id:'bizitis', name:'Bizitis', area:'work', status:'active', priority:'urgent', role:'owner',
+    deadline:'2026-07-12', desc:'SaaS billing + onboarding revamp.',
+    milestones:[ {t:'MVP shipped',due:null,done:true}, {t:'Launch page',due:'Jul 12',done:false}, {t:'Press kit',due:'Jul 20',done:false} ],
+    people:[ {n:'Yossi',r:'designer',c:'@yossi'}, {n:'ACME',r:'client',c:'a@acme.co'} ],
+    members:[ {n:'Ofir',role:'owner',me:true,av:'#6366f1'}, {n:'Dana',role:'editor',av:'#10b981'}, {n:'Sam',role:'viewer',pending:true,av:'#f59e0b'} ],
+    tasks:[ {t:'Review PR #482',pri:'urgent',due:'Jun 27'}, {t:'Write launch copy',pri:'high',due:'Jun 29'} ] },
+  { id:'beiteden', name:'Beit Eden', area:'work', status:'blocked', priority:'high', role:'contributor',
+    deadline:'2026-07-30', desc:'Property mgmt portal — waiting on API access.',
+    milestones:[ {t:'Auth integration',due:'Jul 5',done:false} ], people:[], members:[ {n:'Ofir',role:'editor',me:true,av:'#6366f1'} ], tasks:[] },
+  { id:'newsletter', name:'Newsletter relaunch', area:'work', status:'planning', priority:'medium', role:'owner',
+    deadline:null, desc:'Revive the weekly newsletter.', milestones:[], people:[], members:[{n:'Ofir',role:'owner',me:true,av:'#6366f1'}], tasks:[] },
+  { id:'site', name:'Personal site v2', area:'side', status:'active', priority:'low', role:'owner',
+    deadline:'2026-08-15', desc:'Portfolio rebuild.', milestones:[ {t:'Design',due:null,done:true},{t:'Build',due:'Aug 1',done:false} ], people:[], members:[{n:'Ofir',role:'owner',me:true,av:'#6366f1'}], tasks:[] },
+  { id:'logo', name:'Logo refresh', area:'side', status:'done', priority:'low', role:'advisor',
+    deadline:null, desc:'New brand mark.', milestones:[], people:[], members:[{n:'Ofir',role:'owner',me:true,av:'#6366f1'}], tasks:[] },
+];
+const projById = id => PROJECTS.find(p=>p.id===id);
+
+const TASKS = [
+  { id:1, text:'Call accountant about Q2 filing', area:'work', pri:'high', due:'Jun 25', group:'over', rec:null, project:null },
+  { id:2, text:'Renew passport', area:'personal', pri:'medium', due:'Jun 26', group:'over', rec:null, project:null },
+  { id:3, text:'Gym session', area:'health', pri:'low', due:'Jun 27', group:'today', rec:'daily', project:null },
+  { id:4, text:'Review Bizitis PR #482', area:'work', pri:'urgent', due:'Jun 27', group:'today', rec:null, project:'bizitis' },
+  { id:5, text:'Draft Q3 plan', area:'work', pri:'medium', due:'Jun 30', group:'soon', rec:null, project:'beiteden' },
+  { id:6, text:'Weekly review', area:'personal', pri:'low', due:'Jul 1', group:'soon', rec:'weekly', project:null },
+  { id:7, text:'Pay rent', area:'personal', pri:'medium', due:'Jun 24', group:'done', rec:'monthly', done:true, project:null },
+];
+
+/* calendar events keyed by day-of-month (June 2026 mock) */
+const CAL = {
+  24:[{t:'Pay rent',k:'task'}], 25:[{t:'Call accountant',k:'urgent'}], 26:[{t:'Renew passport',k:'task'}],
+  27:[{t:'Review PR',k:'urgent'},{t:'Gym',k:'task'}], 29:[{t:'Launch copy',k:'task'}], 30:[{t:'◆ Q3 plan',k:'ms'}],
+};
+
+/* ===================== RENDER HELPERS ===================== */
+const el = (h)=>{ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; };
+const areaTag = id => { const a=areaById(id); return a?`<span class="tag area" style="background:${a.color}22;color:${a.color.replace('var(','').replace(')','')}">${a.name}</span>`.replace('var(--','').replace('--',''):''; };
+function areaChipColor(id){ const map={work:'#3b82f6',personal:'#10b981',health:'#a78bfa',side:'#f59e0b'}; return map[id]||'#94a3b8'; }
+function areaTagHTML(id){ const a=areaById(id); if(!a) return ''; const c=areaChipColor(id); return `<span class="tag area" style="background:${c}22;color:${c}">${a.name}</span>`; }
+function priHTML(p){ return p?`<span class="pri ${p}">${p}</span>`:''; }
+function recHTML(r){ return r?`<span class="tag">↻ ${r}</span>`:''; }
+function projTagHTML(pid){ const p=projById(pid); return p?`<span class="tag">▤ ${p.name}</span>`:''; }
+
+let state = { view:'tasks', areaFilter:'all', selTask:4, selProject:'bizitis', calMode:'month', projTab:'overview' };
+
+/* ===================== LIST PANE VIEWS ===================== */
+function renderList(){
+  const p = document.getElementById('listPane');
+  if(state.view==='tasks') p.innerHTML = listTasks();
+  else if(state.view==='projects') p.innerHTML = listProjects();
+  else p.innerHTML = listGeneric();
+  bindList();
+}
+
+function areaFilters(){
+  const chips = ['all',...AREAS.map(a=>a.id)].map(id=>{
+    const on = state.areaFilter===id?'on':'';
+    if(id==='all') return `<button class="chip ${on}" data-area="all">All</button>`;
+    const c=areaChipColor(id); const a=areaById(id);
+    return `<button class="chip ${on}" data-area="${id}"><span class="dot" style="background:${c}"></span>${a.name}</button>`;
+  }).join('');
+  return `<div class="filters">${chips}</div>`;
+}
+
+function taskRow(t){
+  const sel = state.selTask===t.id?'sel':''; const done = t.done?'done':'';
+  const over = t.group==='over'?'over':'';
+  return `<div class="row ${sel} ${done}" data-task="${t.id}">
+    <div class="cbox">✓</div>
+    <div class="rmain">
+      <div class="rtext">${t.text}</div>
+      <div class="rmeta">${areaTagHTML(t.area)} ${projTagHTML(t.project)} ${priHTML(t.pri)} ${recHTML(t.rec)}
+        <span class="due ${over}">${t.due?('· '+t.due):''}</span></div>
+    </div></div>`;
+}
+function listTasks(){
+  const f = state.areaFilter;
+  const vis = TASKS.filter(t=>f==='all'||t.area===f);
+  const grp = (g)=>vis.filter(t=>t.group===g);
+  const sec = (label,arr,cls='')=> arr.length?`<div class="sec-label ${cls}">${label}</div>`+arr.map(taskRow).join(''):'';
+  return `<div class="lhead"><h2>Tasks</h2>${areaFilters()}</div>
+    <div class="lbody">
+      ${sec('⚠ Overdue',grp('over'),'warn')}
+      ${sec('Today',grp('today'))}
+      ${sec('Upcoming',grp('soon'))}
+      ${sec('Completed',grp('done'))}
+    </div>`;
+}
+
+function listProjects(){
+  const f=state.areaFilter;
+  const vis=PROJECTS.filter(p=>f==='all'||p.area===f);
+  const row = p=>{
+    const sel = state.selProject===p.id?'sel':'';
+    const shared = p.members.length>1?`<span class="tag">👥 +${p.members.length-1}</span>`:'';
+    return `<div class="row ${sel}" data-project="${p.id}">
+      <div class="rmain">
+        <div class="rtext">${p.name}</div>
+        <div class="rmeta">${areaTagHTML(p.area)} <span class="badge st-${p.status}">${p.status}</span> ${priHTML(p.priority)} ${shared}</div>
+      </div></div>`;
+  };
+  return `<div class="lhead"><h2>Projects</h2>${areaFilters()}</div>
+    <div class="lbody">${vis.map(row).join('')}</div>`;
+}
+
+function listGeneric(){
+  const map = {
+    calendar:['▦ Calendar','Dated tasks &amp; milestones for the month. Use the detail pane to navigate.'],
+    areas:['◧ Areas','Top-level categories for tasks &amp; projects.'],
+    telegram:['✈ Link Telegram','Connect the PM bot to your account.'],
+    articles:['📄 Articles','Owner-only — research → plans pipeline.'],
+    monitoring:['📊 Monitoring','Owner-only — project health, backups, storage.'],
+  };
+  const [title,desc]=map[state.view]||['',''];
+  return `<div class="lhead"><h2>${title}</h2></div><div class="lbody"><div class="note" style="padding:14px 10px">${desc}</div></div>`;
+}
+
+/* ===================== DETAIL PANE VIEWS ===================== */
+function renderDetail(){
+  const d=document.getElementById('detailPane');
+  const sync=document.getElementById('syncBtn');
+  sync.style.display = state.view==='calendar'?'inline-flex':'none';
+  document.getElementById('topTitle').textContent =
+    ({tasks:'Tasks',projects:'Projects',calendar:'Calendar',areas:'Areas',telegram:'Link Telegram',articles:'Articles (owner)',monitoring:'Monitoring (owner)'})[state.view]||'';
+  if(state.view==='tasks') d.innerHTML=detailTask();
+  else if(state.view==='projects') d.innerHTML=detailProject();
+  else if(state.view==='calendar') d.innerHTML=detailCalendar();
+  else if(state.view==='areas') d.innerHTML=detailAreas();
+  else if(state.view==='telegram') d.innerHTML=detailTelegram();
+  else if(state.view==='articles') d.innerHTML=detailOwner('Articles','📄','Research → analysis → implementation plans. Only you (the Owner) can see this.');
+  else if(state.view==='monitoring') d.innerHTML=detailOwner('Monitoring','📊','Project health, GCS backups, disk &amp; storage, system status. Only you (the Owner) can see this.');
+  bindDetail();
+}
+
+function detailTask(){
+  const t=TASKS.find(x=>x.id===state.selTask)||TASKS[0];
+  const p=projById(t.project);
+  return `<div class="dwrap">
+    <div class="crumbs">Tasks › ${areaById(t.area).name}</div>
+    <h1 class="dtitle">${t.done?'✅ ':''}${t.text}</h1>
+    <div class="dsub">
+      <span>Area: <b>${areaById(t.area).name}</b></span>
+      <span>Priority: <b>${t.pri}</b></span>
+      <span>Due: <b>${t.due||'—'}</b></span>
+      <span>Recurs: <b>${t.rec||'none'}</b></span>
+      ${p?`<span>Project: <b>${p.name}</b></span>`:''}
+    </div>
+    <div class="card">
+      <h3>Details</h3>
+      <div class="ltask"><div class="cbox" style="margin-top:0">${t.done?'✓':''}</div><div style="flex:1">Status</div><span class="pill">${t.done?'Completed':'Open'}</span></div>
+      <div class="ltask"><div style="flex:1">Calendar</div><span class="pill">${t.due?'Synced to “PM Hub” calendar':'No date'}</span></div>
+      ${t.rec?`<div class="ltask"><div style="flex:1">On completion</div><span class="pill">Creates next ${t.rec} occurrence</span></div>`:''}
+    </div>
+    <div class="card">
+      <h3>Actions <span class="note" style="margin-left:auto;font-weight:400">prototype — visual only</span></h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn sm">✓ Complete</button>
+        <button class="btn ghost sm">Edit</button>
+        <button class="btn ghost sm">Move to project…</button>
+        <button class="btn ghost sm" style="color:#fca5a5">Delete</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function detailProject(){
+  const p=projById(state.selProject)||PROJECTS[0];
+  const done=p.milestones.filter(m=>m.done).length, tot=p.milestones.length;
+  const pct = tot?Math.round(done/tot*100):0;
+  const tab=state.projTab;
+  const tabBtn=(k,l)=>`<button class="seg-tab ${tab===k?'on':''}" data-ptab="${k}" style="padding:6px 12px;border-radius:6px;font-size:12px;color:${tab===k?'#fff':'var(--txt-dim)'};background:${tab===k?'var(--bg-3)':'transparent'}">${l}</button>`;
+
+  const overview = `
+    <div class="grid2">
+      <div class="card"><h3>Milestones <span class="note" style="margin-left:auto">${done}/${tot}</span></h3>
+        ${p.milestones.length?p.milestones.map(m=>`<div class="mile ${m.done?'done':''}"><div class="cbox" style="margin-top:0">${m.done?'✓':''}</div><div class="ttl">${m.t}</div>${m.due?`<span class="pill">${m.due}</span>`:''}</div>`).join(''):'<div class="note">No milestones yet.</div>'}
+        <div class="mini-bar" style="margin-top:12px"><span style="width:${pct}%"></span></div>
+      </div>
+      <div class="card"><h3>People <span class="add">+ Person</span></h3>
+        ${p.people.length?p.people.map(pe=>`<div class="person"><div class="av-sm" style="background:var(--bg-3)">${pe.n[0]}</div><div style="flex:1">${pe.n} <span class="note">· ${pe.r}</span></div><span class="note">${pe.c}</span></div>`).join(''):'<div class="note">No people added.</div>'}
+      </div>
+    </div>
+    <div class="card"><h3>Linked tasks <span class="add">+ Task</span></h3>
+      ${p.tasks.length?p.tasks.map(t=>`<div class="ltask"><div class="cbox" style="margin-top:0"></div><div style="flex:1">${t.t}</div>${priHTML(t.pri)}<span class="due">${t.due}</span></div>`).join(''):'<div class="note">No linked tasks.</div>'}
+    </div>`;
+
+  const members = `
+    <div class="banner">👥 Collaboration (M2) — invite by email; collaborators sign in with Google and see this project per their role.</div>
+    <div class="card"><h3>Members <span class="add">+ Invite</span></h3>
+      ${p.members.map(m=>`<div class="member"><div class="av-sm" style="background:${m.av}">${m.n[0]}</div>
+        <div style="flex:1">${m.n}${m.me?' <span class="note">(you)</span>':''}</div>
+        ${m.pending?'<span class="pill pending">pending invite</span>':''}
+        <span class="pill ${m.role}">${m.role}</span></div>`).join('')}
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <input placeholder="invite by email…" style="flex:1;background:var(--bg-3);border:1px solid var(--line);border-radius:8px;padding:8px 11px;color:var(--txt)"/>
+        <button class="btn sm">Send invite</button>
+      </div>
+    </div>`;
+
+  return `<div class="dwrap">
+    <div class="crumbs">Projects › ${areaById(p.area).name}</div>
+    <h1 class="dtitle">${p.name} <span class="badge st-${p.status}">${p.status}</span></h1>
+    <div class="dsub">
+      <span>You: <b>${p.role}</b></span>
+      <span>Priority: <b>${p.priority}</b></span>
+      <span>Deadline: <b>${p.deadline||'—'}</b></span>
+      <span>Members: <b>${p.members.length}</b></span>
+    </div>
+    <p class="note" style="margin:-8px 0 16px">${p.desc}</p>
+    <div class="seg" style="margin-bottom:16px">${tabBtn('overview','Overview')}${tabBtn('members','Members &amp; invites')}</div>
+    ${tab==='members'?members:overview}
+  </div>`;
+}
+
+function detailCalendar(){
+  // June 2026: 1st is Monday (mock). 30 days.
+  const today=27;
+  let cells='';
+  for(let d=1; d<=30; d++){
+    const evs=(CAL[d]||[]).map(e=>`<div class="ev ${e.k}">${e.t}</div>`).join('');
+    cells+=`<div class="cell ${d===today?'today':''}"><div class="dn">${d}</div>${evs}</div>`;
+  }
+  // trailing cells to fill the grid (30 days from Mon → 2 trailing)
+  cells+='<div class="cell dim"></div><div class="cell dim"></div>';
+  return `<div class="dwrap" style="max-width:none">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+      <h1 class="dtitle" style="margin:0">June 2026</h1>
+      <button class="btn ghost sm">◀</button><button class="btn ghost sm">▶</button>
+      <div class="seg" style="margin-left:auto">
+        <button class="on">Month</button><button>Week</button>
+      </div>
+    </div>
+    <div class="banner">⟳ Sync writes to a dedicated <b style="color:#fff">“PM Hub”</b> Google calendar (never your primary) — safe to toggle off.</div>
+    <div class="cal">
+      <div class="ch"><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div></div>
+      <div class="cg">${cells}</div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:16px" class="note">
+      <span><span class="ev task" style="display:inline-block">task</span></span>
+      <span><span class="ev ms" style="display:inline-block">◆ milestone</span></span>
+      <span><span class="ev urgent" style="display:inline-block">urgent</span></span>
+    </div>
+  </div>`;
+}
+
+function detailAreas(){
+  const seed=AREAS.map(a=>`<div class="arow"><span class="swatch" style="background:${areaChipColor(a.id)}"></span>
+    <div style="flex:1">${a.name}</div>
+    <span class="note">${TASKS.filter(t=>t.area===a.id).length} tasks · ${PROJECTS.filter(p=>p.area===a.id).length} projects</span>
+    <button class="btn ghost sm">Rename</button></div>`).join('');
+  return `<div class="dwrap">
+    <h1 class="dtitle">Areas</h1>
+    <p class="note" style="margin-bottom:16px">Top-level categories. Both tasks and projects belong to an area; deleting an area un-files (never deletes) its items.</p>
+    <div class="areas-list">${seed}</div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <input placeholder="New area name…" style="flex:1;background:var(--bg-3);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--txt)"/>
+      <button class="btn sm">+ Add area</button>
+    </div>
+  </div>`;
+}
+
+function detailTelegram(){
+  return `<div class="dwrap">
+    <h1 class="dtitle">✈ Link Telegram</h1>
+    <p class="note" style="margin-bottom:16px">Connect the dedicated PM bot to capture tasks and get your daily agenda from your phone.</p>
+    <div class="card">
+      <h3>Your one-time link code</h3>
+      <div style="display:flex;align-items:center;gap:14px">
+        <span class="code">PMH-7Q2K-N4XR</span>
+        <button class="btn ghost sm">↻ Regenerate</button>
+        <span class="note">expires in 9:48 · single-use</span>
+      </div>
+      <p class="note" style="margin-top:14px">In Telegram, open <b style="color:#fff">@OfirPMHubBot</b> and send:&nbsp; <span class="code">/link PMH-7Q2K-N4XR</span></p>
+    </div>
+    <div class="card">
+      <h3>Bot commands</h3>
+      <div class="ltask"><span class="code">/addtask</span><div style="flex:1;margin-left:10px">add a task (pick area + project inline)</div></div>
+      <div class="ltask"><span class="code">/tasks [area]</span><div style="flex:1;margin-left:10px">list your open tasks</div></div>
+      <div class="ltask"><span class="code">/done &lt;n&gt;</span><div style="flex:1;margin-left:10px">complete a task</div></div>
+      <div class="ltask"><span class="code">/agenda</span><div style="flex:1;margin-left:10px">today + overdue</div></div>
+      <div class="ltask"><span class="code">/projects</span><div style="flex:1;margin-left:10px">your projects by status</div></div>
+    </div>
+  </div>`;
+}
+
+function detailOwner(name,icon,desc){
+  return `<div class="dwrap">
+    <h1 class="dtitle">${icon} ${name}</h1>
+    <div class="banner">🔒 Owner-only surface. Collaborators never see this — gated to <b style="color:#fff">OWNER_EMAIL</b>.</div>
+    <p class="note">${desc}</p>
+    <div class="empty"><div class="big">${icon}</div>Existing MonitoringApp feature — unchanged.<br>Shown here only to confirm it stays in the owner's nav.</div>
+  </div>`;
+}
+
+/* ===================== BINDINGS ===================== */
+function bindList(){
+  document.querySelectorAll('[data-area]').forEach(b=>b.onclick=()=>{ state.areaFilter=b.dataset.area; renderList(); });
+  document.querySelectorAll('[data-task]').forEach(r=>r.onclick=()=>{ state.selTask=+r.dataset.task; renderList(); renderDetail(); });
+  document.querySelectorAll('[data-project]').forEach(r=>r.onclick=()=>{ state.selProject=r.dataset.project; state.projTab='overview'; renderList(); renderDetail(); });
+}
+function bindDetail(){
+  document.querySelectorAll('[data-ptab]').forEach(b=>b.onclick=()=>{ state.projTab=b.dataset.ptab; renderDetail(); });
+}
+document.getElementById('nav').addEventListener('click',e=>{
+  const btn=e.target.closest('.item'); if(!btn) return;
+  document.querySelectorAll('#nav .item').forEach(i=>i.classList.remove('active'));
+  btn.classList.add('active');
+  state.view=btn.dataset.view; state.areaFilter='all';
+  renderList(); renderDetail();
+});
+document.getElementById('addBtn').onclick=()=>{ state.view='tasks'; document.querySelectorAll('#nav .item').forEach(i=>i.classList.toggle('active',i.dataset.view==='tasks')); renderList(); renderDetail(); };
+
+/* init */
+renderList(); renderDetail();
+</script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
+import { auth } from "@/auth";
+import { isOwnerEmail } from "@/lib/email-normalize";
 
 const SESSION_COOKIE = "mon_session";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -55,12 +57,23 @@ export function generateSessionToken(): string {
   return signSessionId(sessionId);
 }
 
-/** Check if the request has a valid session */
+/**
+ * Check if the request has a valid session.
+ *
+ * Accepts EITHER the legacy password cookie (break-glass) OR a signed-in OWNER
+ * Auth.js (Google) session. The legacy monitoring/articles routes that call this
+ * are owner-only (FR-OWN-1), so a non-owner Google session is intentionally not
+ * enough here — only the owner passes. This bridges those routes onto Google
+ * login without a big-bang rewrite; full retirement of the password path
+ * happens once the live Google roundtrip is proven.
+ */
 export async function isAuthenticated(): Promise<boolean> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE);
-  if (!session?.value) return false;
-  return verifySessionToken(session.value) !== null;
+  if (session?.value && verifySessionToken(session.value) !== null) return true;
+
+  const authSession = await auth();
+  return isOwnerEmail(authSession?.user?.email);
 }
 
 /** Check if the request bears a valid bot token (X-Bot-Token header) */
