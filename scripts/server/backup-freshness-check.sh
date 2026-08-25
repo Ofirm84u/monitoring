@@ -13,7 +13,6 @@ SOURCES=(
   "SEO App|gs://m84-backups/seoapp/|seoapp-"
   "Beit Eden|gs://m84-backups/beiteden/|beiteden-"
   "Bizitis|gs://m84-backups/bizitis/|bizitis-"
-  "Hudson|gs://m84-backups/hudson/|hudson-"
   "PR Daily DB|gs://m84-backups/prdaily/|prdaily-2"
   "PR Daily files|gs://m84-backups/prdaily/files/|prdaily-files-"
   "env-files|gs://m84-backups/env-files/|"
@@ -57,7 +56,7 @@ done
 if [[ -n "$STALE_LIST" ]]; then
   MSG="⚠️ Stale backups (>${MAX_AGE_HOURS}h old):"$'\n\n'$(printf "$STALE_LIST")
   /home/ofir/scripts/send-telegram.sh "$MSG" || echo "[$(date -Iseconds)] failed to send Telegram alert"
-  echo "[$(date -Iseconds)] alert sent: $(echo "$STALE_LIST" | grep -c '^•')stale"
+  echo "[$(date -Iseconds)] alert sent: $(printf "$STALE_LIST" | grep -c '^•')stale"
 else
   echo "[$(date -Iseconds)] all backups fresh (≤${MAX_AGE_HOURS}h)"
 fi
