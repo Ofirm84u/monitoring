@@ -64,10 +64,19 @@ function formatSize(bytes: number): string {
 }
 
 export async function runScan(): Promise<StorageScanResult> {
-  const [diskResult, dockerResult, archivesResult, aptResult, journalResult, tmpResult] =
+  const [
+    diskResult,
+    dockerResult,
+    danglingResult,
+    archivesResult,
+    aptResult,
+    journalResult,
+    tmpResult,
+  ] =
     await Promise.all([
       execCommand("df -h / | tail -1"),
       execCommand("docker system df --format '{{.Type}}\t{{.Size}}\t{{.Reclaimable}}' 2>/dev/null"),
+      execCommand("docker images -f dangling=true --format '{{.Size}}' 2>/dev/null"),
       execCommand("find /home/ofir -maxdepth 2 \\( -name '*.tar.gz' -o -name '*.tar' \\) -exec du -cb {} + 2>/dev/null | tail -1"),
       execCommand("du -sb /var/cache/apt 2>/dev/null"),
       execCommand("journalctl --disk-usage 2>/dev/null"),
@@ -91,7 +100,6 @@ export async function runScan(): Promise<StorageScanResult> {
   // cannot remove. We only surface what is actually deletable.
   if (dockerResult.exitCode === 0 && dockerResult.stdout.trim()) {
     let buildCacheReclaimable = 0;
-    let danglingImageReclaimable = 0;
 
     for (const line of dockerResult.stdout.trim().split("\n")) {
       const parts = line.split("\t");
@@ -101,9 +109,19 @@ export async function runScan(): Promise<StorageScanResult> {
       const bytes = sizeMatch ? parseSize(sizeMatch[1]) : 0;
 
       if (type === "Build Cache") buildCacheReclaimable = bytes;
-      // Only count images that are truly dangling (0 containers = truly unused)
-      if (type === "Images" && reclaimStr.includes("100%")) danglingImageReclaimable = bytes;
     }
+
+    // Never derive dangling images from `docker system df`. It reported
+    // "11.77GB (100%)" while every one of those images was in use by a running
+    // container, so the dashboard advertised 11.8G of reclaimable space that
+    // `docker image prune -f` correctly refused to touch. The reclaimable
+    // percentage reflects shared-layer accounting, not whether an image is
+    // dangling. Ask docker for the dangling set directly instead.
+    const danglingImageReclaimable = danglingResult.stdout
+      .trim()
+      .split("\n")
+      .filter((l) => l.trim())
+      .reduce((sum, l) => sum + parseSize(l), 0);
 
     if (buildCacheReclaimable > 0) {
       categories.push({
