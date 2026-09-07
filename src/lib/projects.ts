@@ -30,16 +30,6 @@ export const PROJECTS: ProjectConfig[] = [
     dockerPrefix: "bizitis",
   },
   {
-    id: "hudson",
-    name: "Hudson",
-    description: "Hudson Learning Center",
-    stack: ["Next.js", "Redis", "Docker"],
-    repo: "hudson",
-    url: "https://hudson.m84.me",
-    runtime: "docker",
-    dockerPrefix: "hudson",
-  },
-  {
     id: "seoapp",
     name: "SEO App",
     description: "SEO Audit Web Platform",

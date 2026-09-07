@@ -13,7 +13,6 @@ SOURCES=(
   "SEO App|gs://m84-backups/seoapp/|seoapp-"
   "Beit Eden|gs://m84-backups/beiteden/|beiteden-"
   "Bizitis|gs://m84-backups/bizitis/|bizitis-"
-  "Hudson|gs://m84-backups/hudson/|hudson-"
   "PR Daily DB|gs://m84-backups/prdaily/|prdaily-2"
   "PR Daily files|gs://m84-backups/prdaily/files/|prdaily-files-"
   "env-files|gs://m84-backups/env-files/|"

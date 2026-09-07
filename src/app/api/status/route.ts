@@ -54,7 +54,6 @@ export async function GET(request: Request) {
   // Live HTTP checks
   const sites: Record<string, string> = {
     bizitis: "https://bizitis.co.il",
-    hudson: "https://hudson.m84.me",
     seoapp: "https://app.m84.me",
     beiteden: "https://beiteden.m84.me",
     homeeye: "https://homeeye.m84.me",
