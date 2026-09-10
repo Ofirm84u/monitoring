@@ -56,7 +56,8 @@ export async function GET(request: Request) {
     bizitis: "https://bizitis.co.il",
     seoapp: "https://app.m84.me",
     beiteden: "https://beiteden.m84.me",
-    homeeye: "https://homeeye.m84.me",
+    bookme: "https://bookme.m84.me",
+    kosher: "https://kosher.m84.me",
     mati: "https://mati.m84.me",
     prdaily: "https://pr.m84.me",
   };

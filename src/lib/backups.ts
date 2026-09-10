@@ -66,7 +66,8 @@ const GSUTIL = "/snap/bin/gsutil";
 
 const SOURCES: Array<{ app: string; label: string; bucket: string }> = [
   { app: "crm-mati", label: "CRM Mati", bucket: "gs://m84-backups/crm-mati/" },
-  { app: "homeeye",  label: "HomeEye",  bucket: "gs://m84-backups/homeeye/" },
+  { app: "bookme",   label: "BookMe",   bucket: "gs://m84-backups/bookme/" },
+  { app: "kosher",   label: "Kosher",   bucket: "gs://m84-backups/kosher/" },
   { app: "seoapp",  label: "SEO App",  bucket: "gs://m84-backups/seoapp/" },
   { app: "beiteden", label: "Beit Eden", bucket: "gs://m84-backups/beiteden/" },
   { app: "bizitis",  label: "Bizitis",  bucket: "gs://m84-backups/bizitis/" },

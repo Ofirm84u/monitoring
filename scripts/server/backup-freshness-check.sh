@@ -9,7 +9,8 @@ NOW_EPOCH=$(date +%s)
 # Format: label|gcs-path|filename-prefix
 SOURCES=(
   "CRM Mati|gs://m84-backups/crm-mati/|crm-mati-"
-  "HomeEye|gs://m84-backups/homeeye/|homeeye-"
+  "BookMe|gs://m84-backups/bookme/|bookme-"
+  "Kosher|gs://m84-backups/kosher/|kosher-"
   "SEO App|gs://m84-backups/seoapp/|seoapp-"
   "Beit Eden|gs://m84-backups/beiteden/|beiteden-"
   "Bizitis|gs://m84-backups/bizitis/|bizitis-"
