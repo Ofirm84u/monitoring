@@ -17,6 +17,20 @@ export interface VerifyContract {
   /** Shell command run from the repo root. Must exit 0 on a clean default branch. */
   cmd: string;
   /**
+   * Installs whatever `cmd` needs, run from the repo root before it. Kept
+   * separate so a failed install is reported as infrastructure rather than as a
+   * red baseline — the two mean very different things when attributing breakage.
+   */
+  setupCmd?: string;
+  /**
+   * Pinned because it is not a detail. seoapp's requirements.txt pins
+   * google-ads 25.1.0, which declares requires_python <3.13, so a runner on a
+   * newer Python cannot resolve the file at all. Its Dockerfile already uses
+   * python:3.12-slim; CI has to agree or the gate fails for a reason that has
+   * nothing to do with the change.
+   */
+  pythonVersion?: string;
+  /**
    * Polled after deploy and compared against the G0 snapshot. Only set where a
    * real health endpoint is known — a homepage that returns 200 while the app is
    * broken would make the comparison worse than having none.
@@ -73,6 +87,8 @@ export const PROJECTS: ProjectConfig[] = [
     repo: "seoapp",
     verify: {
       cmd: "pytest -q && npm --prefix apps/web test && npm --prefix apps/web run build",
+      setupCmd: "pip install -r requirements.txt && npm --prefix apps/web ci",
+      pythonVersion: "3.12",
       smokeUrl: "https://app.m84.me/api/health",
       hasPlaywright: false,
       measured: true,

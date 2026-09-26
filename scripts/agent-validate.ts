@@ -524,5 +524,105 @@ try {
 }
 check("a run with no baseline cannot be packeted", refusedWithoutBaseline);
 
+/* ---------------------------------------------------------------- gates -- */
+console.log("\n— Gate evaluation —");
+
+const {
+  matchesGlob,
+  deniedBy,
+  evaluateDiffBudget,
+  evaluateLintDelta,
+  evaluateReproduction,
+  isReadyForDecision,
+} = await import("../src/lib/gates.ts");
+
+check("a literal path matches itself", matchesGlob("package.json", "package.json"));
+check("a literal path does not match a lookalike", !matchesGlob("mypackage.json", "package.json"));
+check("* stays inside one segment", matchesGlob("docker-compose.prod.yml", "docker-compose*.yml"));
+check("* does not cross a slash", !matchesGlob("a/docker-compose.yml", "docker-compose*.yml"));
+check("** crosses segments", matchesGlob(".github/workflows/deploy.yml", ".github/workflows/**"));
+check("** matches a nested path", matchesGlob("apps/api/migrations/001.py", "**/migrations/**"));
+check("a dot in a pattern is literal", !matchesGlob("aenv", ".env"));
+
+check("dependency manifests are denied", deniedBy("package.json") === "package.json");
+check("lockfiles are denied", deniedBy("package-lock.json") !== null);
+check("python requirements are denied", deniedBy("requirements.txt") !== null);
+check("workflow files are denied", deniedBy(".github/workflows/idea-agent.yml") !== null);
+check("env files are denied", deniedBy(".env.production") !== null);
+check("alembic migrations are denied", deniedBy("alembic/versions/abc.py") !== null);
+check("a leading ./ cannot dodge the denylist", deniedBy("./package.json") !== null);
+check("ordinary source files are allowed", deniedBy("src/lib/foo.ts") === null);
+check("a file merely named like a manifest is allowed", deniedBy("src/package.json.md") === null);
+
+const clean = evaluateDiffBudget({ changedFiles: ["src/a.ts", "src/b.ts"], additions: 40, deletions: 10 });
+check("a small clean diff passes G2", clean.status === "pass");
+
+const denied = evaluateDiffBudget({ changedFiles: ["src/a.ts", "package.json"], additions: 5, deletions: 1 });
+check("touching a denied path fails G2", denied.status === "fail");
+check("the failure names the offending path", denied.summary.includes("package.json"));
+
+const tooManyFiles = evaluateDiffBudget({
+  changedFiles: Array.from({ length: 20 }, (_, i) => `src/f${i}.ts`),
+  additions: 10,
+  deletions: 0,
+});
+check("too many files fails G2", tooManyFiles.status === "fail");
+const tooManyLines = evaluateDiffBudget({ changedFiles: ["src/a.ts"], additions: 900, deletions: 0 });
+check("too many lines fails G2", tooManyLines.status === "fail");
+
+check("lint delta passes when unchanged", evaluateLintDelta(29, 29).status === "pass");
+check("lint delta passes when improved", evaluateLintDelta(29, 25).status === "pass");
+check("lint delta fails on a new problem", evaluateLintDelta(29, 30).status === "fail");
+check(
+  "a red baseline does not fail the PR that inherited it",
+  evaluateLintDelta(29, 29).summary.includes("pre-existing"),
+);
+
+check(
+  "fail-then-pass proves the fix",
+  evaluateReproduction("G5-A", true, true).status === "pass",
+);
+check(
+  "a test that never failed does not prove anything",
+  evaluateReproduction("G5-A", false, true).status === "fail",
+);
+check(
+  "a test that still fails does not prove anything",
+  evaluateReproduction("G5-A", true, false).status === "fail",
+);
+check(
+  "the unproven case says so explicitly",
+  evaluateReproduction("G5-A", false, true).summary.includes("never reproduced"),
+);
+
+check(
+  "all gates passing is ready",
+  isReadyForDecision([
+    { gate: "G0", status: "pass" },
+    { gate: "G1", status: "pass" },
+    { gate: "G2", status: "pass" },
+  ]).ready,
+);
+check(
+  "a failed blocking gate is not ready",
+  !isReadyForDecision([{ gate: "G1", status: "pass" }, { gate: "G2", status: "fail" }]).ready,
+);
+check(
+  "an advisory G4 never blocks",
+  isReadyForDecision([{ gate: "G1", status: "pass" }, { gate: "G4", status: "advisory" }]).ready,
+);
+check(
+  "a failed reproduction gate blocks",
+  !isReadyForDecision([{ gate: "G5-A", status: "fail" }]).ready,
+);
+check(
+  "the visual gate is for a human and does not block automatically",
+  isReadyForDecision([{ gate: "G5-C", status: "advisory" }]).ready,
+);
+check(
+  "a re-run gate result supersedes the earlier one",
+  isReadyForDecision([{ gate: "G1", status: "fail" }, { gate: "G1", status: "pass" }]).ready,
+);
+
 console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

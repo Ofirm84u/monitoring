@@ -676,3 +676,154 @@ export async function analyzeDefect(
   const parsed = parseJsonResponse(firstTextBlock(response.content));
   return validateDefectAnalysis(parsed);
 }
+
+/* =========================================================================
+ * G4 — acceptance review.
+ *
+ * A separate call that grades a diff against the QA plan's own criteria. It is
+ * deliberately given the change and the criteria and nothing else: not the
+ * plan's reasoning, not the implementer's explanation of what it did, not its
+ * own earlier turns. A reviewer that has read the argument for a change is no
+ * longer checking the change.
+ *
+ * It returns a verdict per criterion, never prose, and it is advisory — it can
+ * raise a concern but cannot pass a change on its own.
+ * ===================================================================== */
+
+const REVIEW_MAX_TOKENS = 4000;
+const MAX_DIFF_CHARS = 60_000;
+const VERDICT_VALUES = new Set(["met", "not_met", "unclear"]);
+
+export interface CriterionVerdict {
+  criterion: string;
+  verdict: "met" | "not_met" | "unclear";
+  evidence: string;
+}
+
+export interface AcceptanceReview {
+  verdicts: CriterionVerdict[];
+  concerns: string[];
+  metCount: number;
+  totalCount: number;
+}
+
+/**
+ * Trim a diff to fit, from the middle.
+ *
+ * Keeping both ends matters: the head shows what the change starts with and the
+ * tail often holds the tests. Cutting only the tail would hide exactly the part
+ * a reviewer most wants.
+ */
+function clampDiff(diff: string): string {
+  if (diff.length <= MAX_DIFF_CHARS) return diff;
+  const head = diff.slice(0, Math.floor(MAX_DIFF_CHARS * 0.6));
+  const tail = diff.slice(-Math.floor(MAX_DIFF_CHARS * 0.4));
+  return `${head}\n\n/* ... diff truncated in the middle ... */\n\n${tail}`;
+}
+
+function validateReview(parsed: unknown, criteria: string[]): AcceptanceReview {
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("Review result is not an object");
+  }
+  const o = parsed as Record<string, unknown>;
+  if (!Array.isArray(o.verdicts)) throw new Error("Review returned no verdicts");
+
+  const verdicts: CriterionVerdict[] = [];
+  for (const raw of o.verdicts) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.criterion !== "string" || typeof v.verdict !== "string") continue;
+    if (!VERDICT_VALUES.has(v.verdict)) continue;
+    verdicts.push({
+      criterion: v.criterion.slice(0, 300),
+      verdict: v.verdict as CriterionVerdict["verdict"],
+      evidence: typeof v.evidence === "string" ? v.evidence.slice(0, 600) : "",
+    });
+  }
+
+  if (verdicts.length === 0) {
+    throw new Error("Review returned no usable verdicts");
+  }
+
+  // A criterion the reviewer skipped is not a criterion that passed. Anything
+  // missing from the response is recorded as unclear rather than dropped.
+  const covered = new Set(verdicts.map((v) => v.criterion));
+  for (const criterion of criteria) {
+    if (!covered.has(criterion)) {
+      verdicts.push({
+        criterion,
+        verdict: "unclear",
+        evidence: "The reviewer did not address this criterion.",
+      });
+    }
+  }
+
+  return {
+    verdicts,
+    concerns: asStringArray(o.concerns, "concerns", 6),
+    metCount: verdicts.filter((v) => v.verdict === "met").length,
+    totalCount: verdicts.length,
+  };
+}
+
+export async function reviewAcceptance(input: {
+  project: ProjectConfig;
+  stepTitle: string;
+  criteria: string[];
+  diff: string;
+}): Promise<AcceptanceReview> {
+  const { project, stepTitle, criteria, diff } = input;
+
+  if (criteria.length === 0) {
+    throw new Error("No acceptance criteria to review against");
+  }
+
+  const system = `You are reviewing a code change against a fixed list of acceptance criteria. You did not write this change and you have not seen the reasoning behind it. Judge only what the diff shows.
+
+PROJECT: ${project.name}
+STACK: ${project.stack.join(", ")}
+
+Return ONLY a valid JSON object — no markdown fences, no commentary. Schema:
+{
+  "verdicts": [
+    {
+      "criterion": "string — copy the criterion EXACTLY as given, character for character",
+      "verdict": "met" | "not_met" | "unclear",
+      "evidence": "string — cite the specific hunk, file, or line that justifies the verdict"
+    }
+  ],
+  "concerns": ["string", ...]
+}
+
+RULES:
+- Return one entry for EVERY criterion given, in the order given. Do not merge, split, or reword them.
+- "met" requires evidence visible in the diff. A change that looks like it was probably done is "unclear", not "met".
+- "not_met" means the diff contradicts the criterion or plainly omits it.
+- "unclear" means the diff neither shows nor contradicts it — for example a runtime behaviour no static reading can settle. Prefer "unclear" over an optimistic "met"; a wrong "met" is the one mistake here that actually costs something.
+- Evidence must point at the change. Do not restate the criterion back as its own evidence.
+- "concerns" is for problems you noticed that no criterion covers: regressions, unhandled errors, security issues, secrets, debug code left behind. Leave it empty if there are none. Do not use it for style preferences.
+- Respond in English.`;
+
+  const criteriaBlock = criteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
+  const userMessage = `CHANGE UNDER REVIEW: ${stepTitle}
+
+ACCEPTANCE CRITERIA:
+${criteriaBlock}
+
+DIFF:
+${clampDiff(diff)}`;
+
+  const response = await getClient().messages.create({
+    model: VISION_MODEL,
+    max_tokens: REVIEW_MAX_TOKENS,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("Acceptance review was cut off — the diff may be too large to review");
+  }
+
+  const parsed = parseJsonResponse(firstTextBlock(response.content));
+  return validateReview(parsed, criteria);
+}

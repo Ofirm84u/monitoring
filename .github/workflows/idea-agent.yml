@@ -4,10 +4,19 @@
 # so a fix to the gate ladder happens in one place instead of fourteen. A caller
 # is ~15 lines; see docs/idea-agent-caller.yml.
 #
-# Phase 2 scope: prove the round trip — dispatch, branch, PR, signed callback,
-# database, and (Phase 4) Telegram — using an EMPTY COMMIT. No model touches any
-# code here. The implementer arrives in Phase 3, behind the gates, because a PR
-# that nothing verified is exactly what this pipeline exists to prevent.
+# Gate ladder, in the order it runs:
+#   G0  baseline — the verify command at the run's base commit, BEFORE anything
+#       is changed. A red baseline aborts the run: breakage that was already
+#       there cannot be attributed to a change that has not happened yet.
+#   G1  static   — the same command on the branch.
+#   G2  scope    — diff budget and path denylist, evaluated server-side.
+#   G4  accept   — acceptance review against the QA plan's criteria, also
+#       server-side so the API key lives in one place, not fourteen.
+#
+# G3 (behavioural smoke) and G5 (reproduction proof) arrive with the
+# implementer. Until then the change under test is an EMPTY COMMIT: this
+# workflow refuses to run with dry_run false, because a pull request that
+# nothing verified is the failure mode the pipeline exists to prevent.
 #
 # Required secret in the calling repo:
 #   AGENT_SECRET — shared with MonitoringApp; signs callbacks and packet tokens.
@@ -48,7 +57,7 @@ concurrency:
 jobs:
   agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -63,34 +72,50 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           echo "::error::This workflow only runs in dry-run mode."
-          echo "The implementer arrives in Phase 3, once G0-G5 exist. Opening a"
-          echo "PR with model-written code and no gates is the failure mode this"
-          echo "pipeline is built to avoid."
+          echo "The implementer arrives with G3 and G5. Opening a PR with"
+          echo "model-written code and no reproduction proof is the failure mode"
+          echo "this pipeline is built to avoid."
           exit 1
 
-      # Signing helper, written once and reused by every callback below. It
-      # signs the exact bytes it sends: the payload is stripped of its trailing
+      # Signing helper, written once and reused by every POST below. It signs
+      # the exact bytes it sends: the payload is stripped of its trailing
       # newline first, because the server verifies the raw request body and a
       # stray byte would make every signature fail for no visible reason.
-      - name: Install the callback signer
+      - name: Install the signed-POST helper
         run: |
           set -euo pipefail
-          cat > "${RUNNER_TEMP}/post-callback.sh" <<'SCRIPT'
+          cat > "${RUNNER_TEMP}/post-signed.sh" <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
-          payload="$1"
+          url="$1"; payload="$2"
           printf '%s' "${payload}" > "${RUNNER_TEMP}/body.bin"
           ts="$(date +%s)000"
           sig="$(openssl dgst -sha256 -hmac "${AGENT_SECRET}" -r \
             <(printf '%s.%s' "${ts}" "$(cat "${RUNNER_TEMP}/body.bin")") \
             | cut -d' ' -f1)"
-          curl -sS --fail-with-body -X POST "${CALLBACK_URL}" \
+          curl -sS --fail-with-body -X POST "${url}" \
             -H "Content-Type: application/json" \
             -H "X-Agent-Timestamp: ${ts}" \
             -H "X-Agent-Signature: sha256=${sig}" \
             --data-binary "@${RUNNER_TEMP}/body.bin"
           SCRIPT
-          chmod +x "${RUNNER_TEMP}/post-callback.sh"
+          chmod +x "${RUNNER_TEMP}/post-signed.sh"
+
+          # Reporting one gate result is the most repeated action here.
+          cat > "${RUNNER_TEMP}/report-gate.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          gate="$1"; status="$2"; summary="$3"; log="${4:-}"
+          evidence='null'
+          if [[ -n "${log}" && -f "${log}" ]]; then
+            evidence="$(tail -c 4000 "${log}" | jq -Rs '{tail: .}')"
+          fi
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
+            --arg stepId "${STEP_ID}" --arg g "${gate}" \
+            --arg st "${status}" --arg sm "${summary}" --argjson ev "${evidence}" \
+            '{stepId:$stepId, event:"gate", gate:{gate:$g, status:$st, summary:$sm, evidence:$ev}}')"
+          SCRIPT
+          chmod +x "${RUNNER_TEMP}/report-gate.sh"
 
       - name: Fetch the work packet
         id: packet
@@ -112,6 +137,10 @@ jobs:
             echo "base_sha=$(jq -r '.packet.baseSha' packet.json)"
             echo "branch=$(jq -r '.packet.branch' packet.json)"
             echo "title=$(jq -r '.packet.step.title' packet.json)"
+            echo "verify_cmd=$(jq -r '.packet.project.verifyCmd' packet.json)"
+            echo "setup_cmd=$(jq -r '.packet.project.setupCmd // ""' packet.json)"
+            echo "python_version=$(jq -r '.packet.project.pythonVersion' packet.json)"
+            echo "review_url=$(jq -r '.packet.reviewUrl' packet.json)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out the baseline commit
@@ -121,6 +150,45 @@ jobs:
           # branch is now — otherwise the diff would carry other people's work.
           ref: ${{ steps.packet.outputs.base_sha }}
           fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          # From the project's contract, not a default. seoapp's requirements
+          # cap Python below 3.13; a newer runner cannot resolve them at all.
+          python-version: ${{ steps.packet.outputs.python_version }}
+
+      - name: Install dependencies
+        if: ${{ steps.packet.outputs.setup_cmd != '' }}
+        env:
+          SETUP_CMD: ${{ steps.packet.outputs.setup_cmd }}
+        run: |
+          set -euo pipefail
+          # A failed install is infrastructure, not a red baseline. Reporting it
+          # as G0 would blame the repo for a broken runner.
+          if ! eval "${SETUP_CMD}"; then
+            echo "::error::Dependency install failed — this is not a baseline result"
+            exit 1
+          fi
+
+      - name: G0 — baseline at the base commit
+        env:
+          VERIFY_CMD: ${{ steps.packet.outputs.verify_cmd }}
+          BASE_SHA: ${{ steps.packet.outputs.base_sha }}
+        run: |
+          set -uo pipefail
+          eval "${VERIFY_CMD}" > g0.log 2>&1 && code=0 || code=$?
+          if [[ ${code} -eq 0 ]]; then
+            "${RUNNER_TEMP}/report-gate.sh" G0 pass "Baseline green at ${BASE_SHA}" g0.log
+          else
+            "${RUNNER_TEMP}/report-gate.sh" G0 fail \
+              "Baseline is RED at ${BASE_SHA} (exit ${code}) — breakage cannot be attributed, so the run is aborted" g0.log
+            echo "::error::Baseline is red. Fix main before running the agent here."
+            exit 1
+          fi
 
       - name: Open a pull request from an empty commit
         id: pr
@@ -142,8 +210,8 @@ jobs:
             echo "Round-trip check from the Idea Runner."
             echo
             echo "**This PR contains no changes.** It is an empty commit proving"
-            echo "that dispatch, branch, PR and the signed callback all work"
-            echo "before any model is allowed to write code."
+            echo "that dispatch, the gate ladder and the signed callbacks all"
+            echo "work before any model is allowed to write code."
             echo
             echo "- Run: \`${RUN_ID}\`"
             echo "- Step: \`${STEP_ID}\`"
@@ -163,17 +231,59 @@ jobs:
       - name: Report the pull request
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc \
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
             --arg stepId "${STEP_ID}" \
             --arg branch '${{ steps.packet.outputs.branch }}' \
             --arg headSha '${{ steps.pr.outputs.head_sha }}' \
             --argjson prNumber '${{ steps.pr.outputs.number }}' \
             '{stepId:$stepId, event:"implemented", branch:$branch, prNumber:$prNumber, headSha:$headSha}')"
 
+      - name: G1 — the same command on the branch
+        env:
+          VERIFY_CMD: ${{ steps.packet.outputs.verify_cmd }}
+        run: |
+          set -uo pipefail
+          eval "${VERIFY_CMD}" > g1.log 2>&1 && code=0 || code=$?
+          if [[ ${code} -eq 0 ]]; then
+            "${RUNNER_TEMP}/report-gate.sh" G1 pass "Verify command passes on the branch" g1.log
+          else
+            "${RUNNER_TEMP}/report-gate.sh" G1 fail \
+              "Verify command fails on the branch (exit ${code}) while the baseline was green" g1.log
+            exit 1
+          fi
+
+      - name: G2 and G4 — scope and acceptance
+        env:
+          REVIEW_URL: ${{ steps.packet.outputs.review_url }}
+          BASE_SHA: ${{ steps.packet.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          # The denylist, the budget and the acceptance criteria all live on the
+          # server. Sending the shape of the diff rather than judging it here
+          # keeps one definition of the policy instead of fourteen copies.
+          mapfile -t files < <(git diff --name-only "${BASE_SHA}"..HEAD)
+          added="$(git diff --numstat "${BASE_SHA}"..HEAD | awk '{s+=$1} END {print s+0}')"
+          removed="$(git diff --numstat "${BASE_SHA}"..HEAD | awk '{s+=$2} END {print s+0}')"
+
+          payload="$(jq -nc \
+            --arg stepId "${STEP_ID}" \
+            --argjson additions "${added}" \
+            --argjson deletions "${removed}" \
+            --argjson changedFiles "$(printf '%s\n' "${files[@]:-}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
+            --arg diff "$(git diff "${BASE_SHA}"..HEAD | head -c 400000)" \
+            '{stepId:$stepId, changedFiles:$changedFiles, additions:$additions, deletions:$deletions, diff:$diff}')"
+
+          "${RUNNER_TEMP}/post-signed.sh" "${REVIEW_URL}" "${payload}" > review.json
+          jq -r '"G2: \(.scope.status) — \(.scope.summary)"' review.json
+          if [[ "$(jq -r '.ready' review.json)" != "true" ]]; then
+            echo "::error::Blocked by $(jq -r '.blockedBy | join(", ")' review.json)"
+            exit 1
+          fi
+
       - name: Mark the step ready for a decision
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc --arg stepId "${STEP_ID}" \
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc --arg stepId "${STEP_ID}" \
             '{stepId:$stepId, event:"ready"}')"
 
       - name: Report failure
@@ -182,6 +292,6 @@ jobs:
           set -euo pipefail
           # Best effort: the run already failed, and a failing callback here
           # would only bury the original error.
-          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc --arg stepId "${STEP_ID}" \
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc --arg stepId "${STEP_ID}" \
             --arg err "Workflow run ${GITHUB_RUN_ID} failed — see the Actions log" \
             '{stepId:$stepId, event:"failed", error:$err}')" || true

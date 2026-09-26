@@ -67,6 +67,8 @@ export interface AgentPacket {
     repo: string;
     stack: string[];
     verifyCmd: string;
+    setupCmd: string | null;
+    pythonVersion: string;
     hasPlaywright: boolean;
   };
   baseSha: string;
@@ -89,6 +91,8 @@ export interface AgentPacket {
     rules: string[];
   };
   callbackUrl: string;
+  /** Where G2 and G4 are evaluated; both live server-side, not in workflow bash. */
+  reviewUrl: string;
 }
 
 /**
@@ -205,6 +209,8 @@ export function buildPacket(input: {
       repo: project.repo,
       stack: project.stack,
       verifyCmd: project.verify.cmd,
+      setupCmd: project.verify.setupCmd ?? null,
+      pythonVersion: project.verify.pythonVersion ?? "3.12",
       hasPlaywright: project.verify.hasPlaywright,
     },
     baseSha: run.baseSha,
@@ -224,5 +230,6 @@ export function buildPacket(input: {
       rules: buildRules(defectContext, reproductionGate),
     },
     callbackUrl,
+    reviewUrl: callbackUrl.replace(/\/callback$/, "/review"),
   };
 }
