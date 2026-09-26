@@ -413,6 +413,15 @@ export default function DashboardPage() {
             </svg>
             Articles
           </Link>
+          <Link
+            href="/defects"
+            className="px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z" />
+            </svg>
+            Defects
+          </Link>
           <button
             onClick={fetchStatus}
             disabled={loading}

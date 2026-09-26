@@ -6,6 +6,8 @@ import { getArticle, updateArticle } from "@/lib/articles";
 import { PROJECTS } from "@/lib/projects";
 import { planArticleImplementation, planArticleQA } from "@/lib/claude";
 import { createTask } from "@/lib/tasks";
+import { createRun, createSteps } from "@/lib/runs";
+import { buildSteps } from "@/lib/plan-parse";
 
 const RATE_LIMIT = { maxAttempts: 5, windowMs: 60 * 1000 };
 const MAX_CODE_CONTEXT_CHARS = 12_000;
@@ -81,6 +83,22 @@ export async function POST(request: Request, { params }: RouteContext) {
     });
   }
 
+  // Persist the run before anything else. These two plans used to exist only in
+  // the response body below, so nothing could dispatch or resume the work they
+  // describe once the request ended.
+  const run = await createRun({
+    source: "article",
+    sourceId: id,
+    projectId,
+    implementationPlan: implPlan.text,
+    qaPlan: qaPlan.text,
+  });
+
+  // Steps come from the plan's own sections, not from the summary's key ideas —
+  // the unit of work is a step, and scoping a run by key ideas would track
+  // something other than what gets built.
+  const steps = await createSteps(run.id, buildSteps(implPlan.text, qaPlan.text));
+
   // Create one task per key idea — sequential to avoid concurrent writes to tasks.json.tmp
   const tasksCreated = [];
   for (const idea of article.summary.keyIdeas ?? []) {
@@ -96,8 +114,10 @@ export async function POST(request: Request, { params }: RouteContext) {
   });
 
   return json(200, {
+    runId: run.id,
     implementationPlan: implPlan.text,
     qaPlan: qaPlan.text,
+    steps: steps.map((s) => ({ id: s.id, idx: s.idx, title: s.title })),
     tasksCreated,
     projectId,
     projectName: project.name,

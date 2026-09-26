@@ -15,6 +15,13 @@
       "when": 1782839112543,
       "tag": "0001_luxuriant_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790416064429,
+      "tag": "0002_damp_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

@@ -460,3 +460,219 @@ ${articleText}`;
   const parsed = parseJsonResponse(block.text);
   return validateAnalysis(parsed);
 }
+
+/* =========================================================================
+ * Defect triage (vision).
+ *
+ * The first vision call in this codebase. It reads a GUI screenshot and returns
+ * structured findings — never prose — because everything downstream (the tier,
+ * the gate, the plan) branches on the fields.
+ * ===================================================================== */
+
+// Deliberately separate from MODEL: the article pipeline keeps whatever it was
+// tuned on, while triage — which has to read a screenshot and reason about
+// unfamiliar UI — uses the current flagship. Both stay env-overridable.
+const VISION_MODEL = process.env.ANTHROPIC_VISION_MODEL ?? "claude-opus-5";
+const TRIAGE_MAX_TOKENS = 4000;
+
+const DEFECT_TIER_VALUES = new Set(["state", "flow", "visual", "unknown"]);
+const SEVERITY_VALUES = new Set(["low", "medium", "high", "critical"]);
+const CONFIDENCE_VALUES = new Set(["low", "medium", "high"]);
+
+export interface DefectAnalysis {
+  title: string;
+  tier: "state" | "flow" | "visual" | "unknown";
+  severity: "low" | "medium" | "high" | "critical";
+  symptom: string;
+  suspectedCauses: string[];
+  /** Text read off the screenshot — the index used to locate the component. */
+  visibleStrings: string[];
+  suspectedFiles: string[];
+  confidence: "low" | "medium" | "high";
+  missingInfo: string[];
+}
+
+export interface DefectImageInput {
+  mediaType: "image/png" | "image/jpeg" | "image/webp";
+  base64: string;
+}
+
+export interface DefectReportInput {
+  whatHappened: string;
+  whatExpected?: string | null;
+  reproSteps?: string | null;
+  route?: string | null;
+  viewportWidth?: number | null;
+  viewportHeight?: number | null;
+  userAgent?: string | null;
+}
+
+/**
+ * Pull the model's text out of a response.
+ *
+ * Not `content[0]`: on models with thinking enabled by default the first block
+ * is a thinking block, and indexing position zero would throw on a perfectly
+ * good response.
+ */
+function firstTextBlock(content: Anthropic.ContentBlock[]): string {
+  const block = content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") {
+    throw new Error("Claude returned no text block");
+  }
+  return block.text;
+}
+
+function asStringArray(value: unknown, field: string, max: number): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  return value
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.trim())
+    .slice(0, max);
+}
+
+function validateDefectAnalysis(parsed: unknown): DefectAnalysis {
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("Triage result is not an object");
+  }
+  const o = parsed as Record<string, unknown>;
+
+  if (typeof o.title !== "string" || !o.title.trim()) {
+    throw new Error("Triage result is missing a title");
+  }
+  if (typeof o.symptom !== "string" || !o.symptom.trim()) {
+    throw new Error("Triage result is missing a symptom");
+  }
+  if (typeof o.tier !== "string" || !DEFECT_TIER_VALUES.has(o.tier)) {
+    throw new Error(`Invalid tier: ${String(o.tier)}`);
+  }
+  if (typeof o.severity !== "string" || !SEVERITY_VALUES.has(o.severity)) {
+    throw new Error(`Invalid severity: ${String(o.severity)}`);
+  }
+  if (typeof o.confidence !== "string" || !CONFIDENCE_VALUES.has(o.confidence)) {
+    throw new Error(`Invalid confidence: ${String(o.confidence)}`);
+  }
+
+  return {
+    title: o.title.trim().slice(0, 120),
+    tier: o.tier as DefectAnalysis["tier"],
+    severity: o.severity as DefectAnalysis["severity"],
+    symptom: o.symptom.trim(),
+    suspectedCauses: asStringArray(o.suspectedCauses, "suspectedCauses", 5),
+    visibleStrings: asStringArray(o.visibleStrings, "visibleStrings", 12),
+    suspectedFiles: asStringArray(o.suspectedFiles, "suspectedFiles", 8),
+    confidence: o.confidence as DefectAnalysis["confidence"],
+    missingInfo: asStringArray(o.missingInfo, "missingInfo", 5),
+  };
+}
+
+function buildTriageSystemPrompt(project: ProjectConfig): string {
+  return `You are triaging a defect in a web application's GUI, reported by the developer who maintains it. You will usually be given one or more screenshots plus a short description.
+
+PROJECT: ${project.name}
+STACK: ${project.stack.join(", ")}
+DESCRIPTION: ${project.description}
+
+Return ONLY a valid JSON object — no markdown fences, no commentary. Schema:
+{
+  "title": "string — a specific one-line defect title (max 120 chars)",
+  "tier": "state" | "flow" | "visual" | "unknown",
+  "severity": "low" | "medium" | "high" | "critical",
+  "symptom": "string — 1-2 sentences describing precisely what is wrong, in observable terms",
+  "suspectedCauses": ["string", ...],
+  "visibleStrings": ["string", ...],
+  "suspectedFiles": ["string", ...],
+  "confidence": "low" | "medium" | "high",
+  "missingInfo": ["string", ...]
+}
+
+TIER — this decides how the fix can be proven, so choose carefully:
+- "state": wrong data, wrong value, wrong text, stale content, incorrect formatting or
+  timezone. Reproducible by a component test asserting on rendered output.
+- "flow": an interaction that fails — a button that does nothing, a modal that won't
+  close, navigation that loops, a form that can't be submitted. Needs a real browser.
+- "visual": layout, overlap, clipping, spacing, colour, responsive breakage. NOT
+  reproducible by any assertion — it can only be confirmed by looking.
+- "unknown": the evidence genuinely doesn't distinguish these. Prefer this over guessing.
+
+VISIBLE STRINGS — the most important field:
+List the exact text you can read in the screenshot: button labels, headings, column
+names, error messages, visible values. These are used to grep the repository and locate
+the component that rendered this screen. Copy them character-for-character as shown.
+Do not paraphrase, translate, or normalise capitalisation. Omit anything you are not
+certain you can read. If the text is in Hebrew or another non-English language, copy it
+in that language.
+
+SUSPECTED FILES:
+Only name a file if the report or the visible strings genuinely imply it. You do not
+have the repository. An invented path is worse than an empty list — leave it empty.
+
+CONFIDENCE and MISSING INFO:
+A screenshot often isn't enough to locate a cause. If you cannot say what is wrong with
+reasonable certainty, set confidence to "low" and put the specific questions you would
+need answered in missingInfo (e.g. "which timezone is the server configured for?",
+"does this happen on desktop too or only at this width?"). An honest "I need X" is more
+useful than a confident guess, and the runner will ask the developer rather than plan
+against it.
+
+SEVERITY: judge by user impact — "critical" means data loss, a broken purchase or login
+path, or an outage; "low" means cosmetic or rare.`;
+}
+
+function buildTriageUserText(report: DefectReportInput): string {
+  const lines = [`WHAT HAPPENED: ${report.whatHappened}`];
+  if (report.whatExpected) lines.push(`WHAT WAS EXPECTED: ${report.whatExpected}`);
+  if (report.reproSteps) lines.push(`STEPS TO REPRODUCE: ${report.reproSteps}`);
+  if (report.route) lines.push(`ROUTE: ${report.route}`);
+  if (report.viewportWidth && report.viewportHeight) {
+    lines.push(`VIEWPORT: ${report.viewportWidth}x${report.viewportHeight}`);
+  }
+  if (report.userAgent) lines.push(`BROWSER: ${report.userAgent}`);
+  if (report.viewportWidth && report.viewportWidth <= 500) {
+    lines.push(
+      "NOTE: this was reported at a narrow viewport — consider whether the defect is responsive-only.",
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Triage a GUI defect from its screenshots and description.
+ *
+ * Returns structured findings only. Whether it can be auto-fixed at all is
+ * decided downstream by the tier and the project's verify contract, not here.
+ */
+export async function analyzeDefect(
+  project: ProjectConfig,
+  report: DefectReportInput,
+  images: DefectImageInput[],
+): Promise<DefectAnalysis> {
+  const content: Anthropic.ContentBlockParam[] = images.map((image) => ({
+    type: "image" as const,
+    source: {
+      type: "base64" as const,
+      media_type: image.mediaType,
+      data: image.base64,
+    },
+  }));
+
+  // Text after the images: the model reads the evidence, then the claim about it.
+  content.push({ type: "text", text: buildTriageUserText(report) });
+
+  const response = await getClient().messages.create({
+    model: VISION_MODEL,
+    max_tokens: TRIAGE_MAX_TOKENS,
+    system: buildTriageSystemPrompt(project),
+    messages: [{ role: "user", content }],
+  });
+
+  if (response.stop_reason === "refusal") {
+    throw new Error("Triage was declined for this screenshot");
+  }
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("Triage response was cut off — screenshot may be too complex");
+  }
+
+  const parsed = parseJsonResponse(firstTextBlock(response.content));
+  return validateDefectAnalysis(parsed);
+}

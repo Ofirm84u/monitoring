@@ -6,6 +6,35 @@ const EXEC_TIMEOUT_MS = 15_000;
 
 // --- Project definitions ---
 
+/**
+ * What "still working" means for one project, so the gate ladder has something
+ * concrete to run. Without a contract a project can be reported against and
+ * planned for, but G0 has nothing to measure and so no run can start — that is
+ * the intended behaviour, not a gap. Adding a contract is what makes a repo
+ * eligible; nothing else special-cases one project over another.
+ */
+export interface VerifyContract {
+  /** Shell command run from the repo root. Must exit 0 on a clean default branch. */
+  cmd: string;
+  /**
+   * Polled after deploy and compared against the G0 snapshot. Only set where a
+   * real health endpoint is known — a homepage that returns 200 while the app is
+   * broken would make the comparison worse than having none.
+   */
+  smokeUrl?: string;
+  /**
+   * Playwright is already installed in this repo, so Tier B (browser) defect
+   * reproduction is possible here. The agent can never install it itself: G2's
+   * denylist blocks dependency manifests, so onboarding it is a human task.
+   */
+  hasPlaywright: boolean;
+  /**
+   * True only where `cmd` has actually been observed exiting 0 on a clean
+   * checkout. Everything else is read off the repo and is a guess until G0 runs.
+   */
+  measured: boolean;
+}
+
 export interface ProjectConfig {
   id: string;
   name: string;
@@ -16,6 +45,8 @@ export interface ProjectConfig {
   runtime?: "pm2" | "docker" | "none";
   pm2Name?: string;
   dockerPrefix?: string;
+  /** Absent means the Idea Runner can plan for this project but cannot gate it. */
+  verify?: VerifyContract;
 }
 
 export const PROJECTS: ProjectConfig[] = [
@@ -25,6 +56,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Israeli Business Academy Platform",
     stack: ["Next.js", "Postgres", "Redis", "Prisma"],
     repo: "bizitis",
+    verify: {
+      cmd: "npm run lint && npm test && npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     url: "https://bizitis.co.il",
     runtime: "docker",
     dockerPrefix: "bizitis",
@@ -35,6 +71,12 @@ export const PROJECTS: ProjectConfig[] = [
     description: "SEO Audit Web Platform",
     stack: ["Next.js", "FastAPI", "Celery", "Postgres", "Redis"],
     repo: "seoapp",
+    verify: {
+      cmd: "pytest -q && npm --prefix apps/web test && npm --prefix apps/web run build",
+      smokeUrl: "https://app.m84.me/api/health",
+      hasPlaywright: false,
+      measured: true,
+    },
     url: "https://app.m84.me",
     runtime: "docker",
     dockerPrefix: "seoapp",
@@ -45,6 +87,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Resident Management System",
     stack: ["Next.js", "Postgres", "Redis", "Docker"],
     repo: "beiteden",
+    verify: {
+      cmd: "npm run lint && npm run test:types && npm run test:routes && npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     url: "https://beiteden.m84.me",
     runtime: "docker",
     dockerPrefix: "beiteden",
@@ -55,6 +102,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Multi-tenant appointment booking SaaS",
     stack: ["Next.js", "Postgres", "Drizzle", "Auth.js"],
     repo: "BookMe",
+    verify: {
+      cmd: "npm run typecheck && npm run lint && npm run build",
+      hasPlaywright: true,
+      measured: false,
+    },
     url: "https://bookme.m84.me",
     runtime: "docker",
     dockerPrefix: "bookme",
@@ -65,7 +117,7 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Kosher business management platform",
     stack: ["Next.js", "Postgres", "Drizzle", "Cardcom"],
     repo: "cosher",
-    url: "https://kosher.m84.me",
+    url: "https://tzav.m84.me",
     runtime: "docker",
     dockerPrefix: "kosher",
   },
@@ -75,6 +127,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "CRM for Mati (QA / pre-MVP)",
     stack: ["Next.js", "React 19", "Prisma", "Postgres"],
     repo: "crm-mati",
+    verify: {
+      cmd: "npm run typecheck && npm run lint && npm test && npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     url: "https://mati.m84.me",
     runtime: "docker",
     dockerPrefix: "crm-mati",
@@ -85,6 +142,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Daily content pipeline (Anthropic-powered)",
     stack: ["Python", "Postgres", "Redis", "Anthropic"],
     repo: "prdaily",
+    verify: {
+      cmd: "pytest -q",
+      hasPlaywright: false,
+      measured: false,
+    },
     url: "https://pr.m84.me",
     runtime: "docker",
     dockerPrefix: "prdaily",
@@ -95,6 +157,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Server monitoring dashboard",
     stack: ["Next.js", "Tailwind"],
     repo: "monitoring",
+    verify: {
+      cmd: "npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     url: "https://mon.m84.me",
     runtime: "pm2",
     pm2Name: "monitor",
@@ -105,6 +172,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Trading application",
     stack: ["Python", "Node.js"],
     repo: "trading-app",
+    verify: {
+      cmd: "pytest -q",
+      hasPlaywright: false,
+      measured: false,
+    },
     runtime: "none",
   },
   {
@@ -121,6 +193,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "WhatsApp Web REST API via Baileys",
     stack: ["Node.js"],
     repo: "whatsapp-bridge",
+    verify: {
+      cmd: "npm run typecheck && npm run lint && npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     runtime: "none",
   },
   {
@@ -129,6 +206,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "Reusable Next.js training module",
     stack: ["Next.js"],
     repo: "learning-center",
+    verify: {
+      cmd: "npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     runtime: "none",
   },
   {
@@ -145,6 +227,11 @@ export const PROJECTS: ProjectConfig[] = [
     description: "LinkedIn automation, analytics & content scheduling",
     stack: ["Next.js", "Gemini", "LinkedIn API"],
     repo: "linkedin-automation",
+    verify: {
+      cmd: "npm run build",
+      hasPlaywright: false,
+      measured: false,
+    },
     runtime: "none",
   },
 ];

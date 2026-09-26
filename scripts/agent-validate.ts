@@ -1,0 +1,330 @@
+/**
+ * Phase 1 validation for the Idea Runner. No API key, no network. Run with:
+ *   SQLITE_PATH=./.data/app.db DEFECT_IMAGES_DIR=./.data/defect-images \
+ *   node --experimental-strip-types scripts/agent-validate.ts
+ *
+ * Covers the four things Phase 1 claims: images are admitted by their bytes and
+ * nothing else, plans survive as runs and steps, one repo can only have one
+ * active step, and a decision token spends exactly once.
+ */
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+let failures = 0;
+function check(name: string, cond: boolean) {
+  console.log(`${cond ? "✓" : "✗"} ${name}`);
+  if (!cond) failures++;
+}
+
+async function expectReject(name: string, fn: () => Promise<unknown>) {
+  try {
+    await fn();
+    check(name, false);
+  } catch {
+    check(name, true);
+  }
+}
+
+// Keep test images out of the real store.
+const imagesDir = mkdtempSync(join(tmpdir(), "defect-images-"));
+process.env.DEFECT_IMAGES_DIR = imagesDir;
+process.env.SQLITE_PATH ??= "./.data/app.db";
+
+const { sniffMediaType, storeDefectImage, readDefectImage } = await import(
+  "../src/lib/defect-images.ts"
+);
+const { parsePlanSteps, parseAcceptanceCriteria, buildSteps } = await import(
+  "../src/lib/plan-parse.ts"
+);
+
+/* ---------------------------------------------------------------- images -- */
+console.log("\n— Image admission is decided by magic bytes —");
+
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(64),
+]);
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
+const WEBP = Buffer.concat([
+  Buffer.from("RIFF", "ascii"),
+  Buffer.from([0x40, 0x00, 0x00, 0x00]),
+  Buffer.from("WEBP", "ascii"),
+  Buffer.alloc(64),
+]);
+const SVG = Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`,
+  "utf8",
+);
+const GIF = Buffer.concat([Buffer.from("GIF89a", "ascii"), Buffer.alloc(64)]);
+
+check("PNG is recognised", sniffMediaType(PNG) === "image/png");
+check("JPEG is recognised", sniffMediaType(JPEG) === "image/jpeg");
+check("WebP is recognised", sniffMediaType(WEBP) === "image/webp");
+check("SVG is refused — it is a script container", sniffMediaType(SVG) === null);
+check("GIF is refused — not on the allowlist", sniffMediaType(GIF) === null);
+check(
+  "a RIFF file that is not WebP is refused",
+  sniffMediaType(
+    Buffer.concat([
+      Buffer.from("RIFF", "ascii"),
+      Buffer.alloc(4),
+      Buffer.from("WAVE", "ascii"),
+      Buffer.alloc(64),
+    ]),
+  ) === null,
+);
+
+await expectReject("an SVG claiming to be a screenshot is rejected", () =>
+  storeDefectImage(SVG.toString("base64")),
+);
+await expectReject("an empty payload is rejected", () => storeDefectImage(""));
+
+const stored = await storeDefectImage(PNG.toString("base64"));
+check("a real PNG is stored", stored.mediaType === "image/png");
+check(
+  "storage is content-addressed",
+  stored.filename === `${stored.sha256}.png`,
+);
+const readBack = await readDefectImage(stored.filename);
+check("stored bytes read back identically", !!readBack && readBack.equals(PNG));
+
+const again = await storeDefectImage(PNG.toString("base64"));
+check("the same screenshot twice is one file", again.filename === stored.filename);
+
+check(
+  "path traversal in a filename reads nothing",
+  (await readDefectImage("../../etc/passwd")) === null,
+);
+
+/* ----------------------------------------------------------- plan parsing -- */
+console.log("\n— Plans become steps, not key ideas —");
+
+const SAMPLE_PLAN = `# תכנית יישום — Cache SERP lookups
+
+## תמצית השינוי
+שתי שורות.
+
+## שלבי יישום
+
+### שלב 1 — הוספת שכבת cache
+**מה לשנות:** להוסיף Redis cache.
+\`\`\`typescript
+const cached = await redis.get(key);
+\`\`\`
+**תוצאה מצופה:** פחות קריאות.
+
+### שלב 2 — פינוי cache במחיקת פרויקט
+**מה לשנות:** invalidate.
+**תוצאה מצופה:** אין stale data.
+
+## טבלת עדיפויות
+| שלב | מורכבות |
+
+## פרומפט ל-Claude Code
+\`\`\`
+prompt here
+\`\`\`
+
+## סטטוס תכנית
+בדוק שהכל הושלם.`;
+
+const SAMPLE_QA = `# תכנית QA
+
+## בדיקות עשן (Smoke Tests)
+- [ ] הדף נטען ללא שגיאות console
+- [ ] cache מחזיר תוצאה זהה לקריאה ישירה
+- [ ] מחיקת פרויקט מנקה את ה-cache
+
+## סקירת קוד — Checklist
+- [ ] אין רגרסיות בפונקציונליות קיימת
+- [ ] [placeholder שלא מולא]
+`;
+
+const steps = parsePlanSteps(SAMPLE_PLAN);
+check("both plan steps are found", steps.length === 2);
+check(
+  "step titles come from the plan headings",
+  steps[0]?.title.includes("שלב 1") === true,
+);
+check(
+  "a step keeps its code block, not a summary",
+  steps[0]?.instruction.includes("redis.get") === true,
+);
+check(
+  "the priorities table is not treated as a step",
+  !steps.some((s) => s.title.includes("טבלת")),
+);
+check(
+  "the Claude Code prompt section is not treated as a step",
+  !steps.some((s) => s.title.includes("פרומפט")),
+);
+check(
+  "the plan-status section is not treated as a step",
+  !steps.some((s) => s.title.includes("סטטוס")),
+);
+
+const criteria = parseAcceptanceCriteria(SAMPLE_QA);
+check("checklist items become acceptance criteria", criteria.length === 4);
+check(
+  "unfilled template placeholders are dropped",
+  !criteria.some((c) => c.startsWith("[")),
+);
+
+const built = buildSteps(SAMPLE_PLAN, SAMPLE_QA);
+check("every step carries the acceptance criteria", built.every((s) => s.acceptance.length === 4));
+check(
+  "an unparseable plan still yields one actionable step",
+  buildSteps("no headings at all, just prose", SAMPLE_QA).length === 1,
+);
+
+/* ------------------------------------------------------------------ runs -- */
+console.log("\n— Runs, the per-repo lock, and single-use decisions —");
+
+// Build the drizzle instance inline (mirrors src/db/index.ts, same reason as
+// scripts/spike-validate.ts): this runs under Node's raw TS loader, which
+// resolves neither the app's extensionless imports nor its "@/" alias. So the
+// guarantees below are exercised against the real schema directly — the lock,
+// the cascade, and the single-use redemption are enforced by SQLite, which is
+// the part worth proving. The thin wrappers in src/lib/runs.ts that issue these
+// same statements are covered over HTTP in Phase 2.
+const { eq, and, isNull } = await import("drizzle-orm");
+const { default: Database } = await import("better-sqlite3");
+const { drizzle } = await import("drizzle-orm/better-sqlite3");
+const schema = await import("../src/db/schema.ts");
+
+const sqlite = new Database(process.env.SQLITE_PATH ?? "./.data/app.db");
+sqlite.pragma("foreign_keys = ON");
+const db = drizzle(sqlite, { schema });
+const { agentRuns, agentSteps, agentLocks, agentDecisions } = schema;
+
+const PROJECT = `validate-${Date.now()}`;
+let runId: string | null = null;
+
+try {
+  const [run] = db
+    .insert(agentRuns)
+    .values({
+      source: "article",
+      sourceId: "validate-article",
+      projectId: PROJECT,
+      implementationPlan: SAMPLE_PLAN,
+      qaPlan: SAMPLE_QA,
+      status: "planning",
+    })
+    .returning()
+    .all();
+  runId = run.id;
+
+  check("a run persists the implementation plan", run.implementationPlan === SAMPLE_PLAN);
+  check("a run persists the QA plan", run.qaPlan === SAMPLE_QA);
+  check("a new run has no baseline — nothing can be compared yet", run.baseSha === null);
+
+  const created = db
+    .insert(agentSteps)
+    .values(
+      built.map((step, idx) => ({
+        runId: run.id,
+        idx,
+        title: step.title,
+        instruction: step.instruction,
+        acceptance: step.acceptance,
+      })),
+    )
+    .returning()
+    .all();
+  check("steps are created for the run", created.length === built.length);
+
+  const ordered = db
+    .select()
+    .from(agentSteps)
+    .where(eq(agentSteps.runId, run.id))
+    .orderBy(agentSteps.idx)
+    .all();
+  check(
+    "steps are ordered and indexed from zero",
+    ordered[0]?.idx === 0 && ordered[1]?.idx === 1,
+  );
+  check(
+    "acceptance criteria survive the round trip as JSON",
+    (ordered[0]?.acceptance ?? []).length === 4,
+  );
+
+  let duplicateIdxRejected = false;
+  try {
+    db.insert(agentSteps)
+      .values({ runId: run.id, idx: 0, title: "dupe", instruction: "dupe" })
+      .run();
+  } catch {
+    duplicateIdxRejected = true;
+  }
+  check("two steps cannot share an index in one run", duplicateIdxRejected);
+
+  // One active step per repo — the primary key is what enforces it.
+  db.insert(agentLocks).values({ projectId: PROJECT, stepId: ordered[0].id }).run();
+  let secondLockRejected = false;
+  try {
+    db.insert(agentLocks).values({ projectId: PROJECT, stepId: ordered[1].id }).run();
+  } catch {
+    secondLockRejected = true;
+  }
+  check("a second step cannot take the same repo's lock", secondLockRejected);
+
+  db.delete(agentLocks).where(eq(agentLocks.projectId, PROJECT)).run();
+  db.insert(agentLocks).values({ projectId: PROJECT, stepId: ordered[1].id }).run();
+  check(
+    "the lock is reusable once released",
+    db.select().from(agentLocks).where(eq(agentLocks.projectId, PROJECT)).all().length === 1,
+  );
+
+  // Single-use decision tokens: the conditional update is what makes two
+  // racing button presses resolve in the database rather than in app code.
+  const [decision] = db
+    .insert(agentDecisions)
+    .values({
+      stepId: ordered[0].id,
+      kind: "approve",
+      prompt: "Merge PR #1?",
+      token: "validate-token-1",
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    .returning()
+    .all();
+
+  const firstUse = db
+    .update(agentDecisions)
+    .set({ usedAt: new Date(), action: "merge" })
+    .where(and(eq(agentDecisions.id, decision.id), isNull(agentDecisions.usedAt)))
+    .returning()
+    .all();
+  const replay = db
+    .update(agentDecisions)
+    .set({ usedAt: new Date(), action: "merge" })
+    .where(and(eq(agentDecisions.id, decision.id), isNull(agentDecisions.usedAt)))
+    .returning()
+    .all();
+  check("a decision token redeems once", firstUse.length === 1);
+  check("a replayed button press changes nothing", replay.length === 0);
+
+  // Everything hangs off the run.
+  db.delete(agentRuns).where(eq(agentRuns.id, run.id)).run();
+  runId = null;
+  check(
+    "deleting a run cascades to its steps",
+    db.select().from(agentSteps).where(eq(agentSteps.runId, run.id)).all().length === 0,
+  );
+  check(
+    "deleting a run cascades to its locks",
+    db.select().from(agentLocks).where(eq(agentLocks.projectId, PROJECT)).all().length === 0,
+  );
+  check(
+    "deleting a run cascades to its decisions",
+    db.select().from(agentDecisions).where(eq(agentDecisions.id, decision.id)).all().length === 0,
+  );
+} finally {
+  if (runId) db.delete(agentRuns).where(eq(agentRuns.id, runId)).run();
+  rmSync(imagesDir, { recursive: true, force: true });
+}
+
+console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
+process.exit(failures === 0 ? 0 : 1);
