@@ -1,0 +1,187 @@
+# Idea Runner — the reusable half of the agent workflow.
+#
+# Every target repo calls this one workflow rather than carrying its own copy,
+# so a fix to the gate ladder happens in one place instead of fourteen. A caller
+# is ~15 lines; see docs/idea-agent-caller.yml.
+#
+# Phase 2 scope: prove the round trip — dispatch, branch, PR, signed callback,
+# database, and (Phase 4) Telegram — using an EMPTY COMMIT. No model touches any
+# code here. The implementer arrives in Phase 3, behind the gates, because a PR
+# that nothing verified is exactly what this pipeline exists to prevent.
+#
+# Required secret in the calling repo:
+#   AGENT_SECRET — shared with MonitoringApp; signs callbacks and packet tokens.
+
+name: Idea Runner agent
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        required: true
+        type: string
+      step_id:
+        required: true
+        type: string
+      packet_token:
+        required: true
+        type: string
+      packet_url:
+        required: true
+        type: string
+      callback_url:
+        required: true
+        type: string
+      dry_run:
+        required: true
+        type: boolean
+    secrets:
+      AGENT_SECRET:
+        required: true
+
+concurrency:
+  # One agent run per repo. The database lock already enforces this, but a
+  # queued duplicate here would still check out the same repo twice.
+  group: idea-agent-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      AGENT_SECRET: ${{ secrets.AGENT_SECRET }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      STEP_ID: ${{ inputs.step_id }}
+
+    steps:
+      - name: Refuse to run an unverified implementer
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "::error::This workflow only runs in dry-run mode."
+          echo "The implementer arrives in Phase 3, once G0-G5 exist. Opening a"
+          echo "PR with model-written code and no gates is the failure mode this"
+          echo "pipeline is built to avoid."
+          exit 1
+
+      # Signing helper, written once and reused by every callback below. It
+      # signs the exact bytes it sends: the payload is stripped of its trailing
+      # newline first, because the server verifies the raw request body and a
+      # stray byte would make every signature fail for no visible reason.
+      - name: Install the callback signer
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/post-callback.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          payload="$1"
+          printf '%s' "${payload}" > "${RUNNER_TEMP}/body.bin"
+          ts="$(date +%s)000"
+          sig="$(openssl dgst -sha256 -hmac "${AGENT_SECRET}" -r \
+            <(printf '%s.%s' "${ts}" "$(cat "${RUNNER_TEMP}/body.bin")") \
+            | cut -d' ' -f1)"
+          curl -sS --fail-with-body -X POST "${CALLBACK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Agent-Timestamp: ${ts}" \
+            -H "X-Agent-Signature: sha256=${sig}" \
+            --data-binary "@${RUNNER_TEMP}/body.bin"
+          SCRIPT
+          chmod +x "${RUNNER_TEMP}/post-callback.sh"
+
+      - name: Fetch the work packet
+        id: packet
+        env:
+          PACKET_URL: ${{ inputs.packet_url }}
+          PACKET_TOKEN: ${{ inputs.packet_token }}
+        run: |
+          set -euo pipefail
+          # The dispatch payload carries only ids and a short-lived token; the
+          # instruction is fetched here so it has one authoritative copy and
+          # never sits in the Actions UI or a webhook delivery.
+          http_code="$(curl -sS -o packet.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${PACKET_TOKEN}" "${PACKET_URL}")"
+          if [[ "${http_code}" != "200" ]]; then
+            echo "::error::Packet fetch returned ${http_code}"
+            exit 1
+          fi
+          {
+            echo "base_sha=$(jq -r '.packet.baseSha' packet.json)"
+            echo "branch=$(jq -r '.packet.branch' packet.json)"
+            echo "title=$(jq -r '.packet.step.title' packet.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the baseline commit
+        uses: actions/checkout@v4
+        with:
+          # The exact commit the run is anchored to, not whatever the default
+          # branch is now — otherwise the diff would carry other people's work.
+          ref: ${{ steps.packet.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Open a pull request from an empty commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.packet.outputs.branch }}
+          TITLE: ${{ steps.packet.outputs.title }}
+          BASE_SHA: ${{ steps.packet.outputs.base_sha }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "idea-runner[bot]"
+          git config user.email "idea-runner@users.noreply.github.com"
+          git switch -c "${BRANCH}"
+          git commit --allow-empty -m "chore(idea-runner): round-trip check"
+          git push --set-upstream origin "${BRANCH}"
+
+          {
+            echo "Round-trip check from the Idea Runner."
+            echo
+            echo "**This PR contains no changes.** It is an empty commit proving"
+            echo "that dispatch, branch, PR and the signed callback all work"
+            echo "before any model is allowed to write code."
+            echo
+            echo "- Run: \`${RUN_ID}\`"
+            echo "- Step: \`${STEP_ID}\`"
+            echo "- Baseline: \`${BASE_SHA}\`"
+            echo
+            echo "Safe to close."
+          } > pr-body.md
+
+          default_branch="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
+          gh pr create --base "${default_branch}" --head "${BRANCH}" \
+            --title "[dry run] ${TITLE}" --body-file pr-body.md
+          {
+            echo "number=$(gh pr view "${BRANCH}" --json number -q .number)"
+            echo "head_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report the pull request
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc \
+            --arg stepId "${STEP_ID}" \
+            --arg branch '${{ steps.packet.outputs.branch }}' \
+            --arg headSha '${{ steps.pr.outputs.head_sha }}' \
+            --argjson prNumber '${{ steps.pr.outputs.number }}' \
+            '{stepId:$stepId, event:"implemented", branch:$branch, prNumber:$prNumber, headSha:$headSha}')"
+
+      - name: Mark the step ready for a decision
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc --arg stepId "${STEP_ID}" \
+            '{stepId:$stepId, event:"ready"}')"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          # Best effort: the run already failed, and a failing callback here
+          # would only bury the original error.
+          "${RUNNER_TEMP}/post-callback.sh" "$(jq -nc --arg stepId "${STEP_ID}" \
+            --arg err "Workflow run ${GITHUB_RUN_ID} failed — see the Actions log" \
+            '{stepId:$stepId, event:"failed", error:$err}')" || true

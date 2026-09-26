@@ -326,5 +326,203 @@ try {
   rmSync(imagesDir, { recursive: true, force: true });
 }
 
+/* ---------------------------------------------------------- agent auth -- */
+console.log("\n— Packet tokens and callback signatures —");
+
+process.env.AGENT_SECRET = "x".repeat(48);
+const {
+  signPacketToken,
+  verifyPacketToken,
+  signPayload,
+  verifySignature,
+  AGENT_SIGNATURE_HEADER,
+  AGENT_TIMESTAMP_HEADER,
+} = await import("../src/lib/agent-auth.ts");
+
+check("header names are lowercase for Headers.get()", AGENT_SIGNATURE_HEADER === "x-agent-signature" && AGENT_TIMESTAMP_HEADER === "x-agent-timestamp");
+
+const STEP = "step-abc";
+const token = signPacketToken(STEP, 0);
+check("a packet token is minted", typeof token === "string");
+check("the token verifies for its own step", verifyPacketToken(STEP, token).valid);
+check(
+  "the token does not verify for another step",
+  !verifyPacketToken("step-xyz", token).valid,
+);
+
+// Bound to the attempt: a stale workflow re-run must not fetch current work.
+const attemptOne = signPacketToken(STEP, 1);
+check(
+  "a token carries its attempt",
+  verifyPacketToken(STEP, attemptOne).valid &&
+    (verifyPacketToken(STEP, attemptOne) as { attempt: number }).attempt === 1,
+);
+check(
+  "a tampered signature is refused",
+  !verifyPacketToken(STEP, `${token!.slice(0, -1)}0`).valid,
+);
+check("a malformed token is refused", !verifyPacketToken(STEP, "nonsense").valid);
+check("a missing token is refused", !verifyPacketToken(STEP, null).valid);
+check(
+  "an expired token is refused",
+  !verifyPacketToken(STEP, signPacketToken(STEP, 0, -1_000)).valid,
+);
+
+const rawBody = JSON.stringify({ stepId: STEP, event: "ready" });
+const now = Date.now();
+const signature = signPayload(rawBody, now);
+check("a callback signature is produced", typeof signature === "string");
+check(
+  "a correctly signed callback verifies",
+  verifySignature(rawBody, signature, String(now)).valid,
+);
+check(
+  "changing the body invalidates the signature",
+  !verifySignature(`${rawBody} `, signature, String(now)).valid,
+);
+check(
+  "changing the timestamp invalidates the signature",
+  !verifySignature(rawBody, signature, String(now + 1)).valid,
+);
+check(
+  "a replayed callback outside the window is refused",
+  !verifySignature(
+    rawBody,
+    signPayload(rawBody, now - 10 * 60 * 1000),
+    String(now - 10 * 60 * 1000),
+  ).valid,
+);
+check(
+  "a callback with no signature is refused",
+  !verifySignature(rawBody, null, String(now)).valid,
+);
+
+// Fail closed: an unconfigured deployment must reject the agent, not trust it.
+const savedSecret = process.env.AGENT_SECRET;
+delete process.env.AGENT_SECRET;
+check("nothing is minted without AGENT_SECRET", signPacketToken(STEP, 0) === null);
+check(
+  "nothing verifies without AGENT_SECRET",
+  !verifySignature(rawBody, signature, String(now)).valid,
+);
+check("a short AGENT_SECRET is treated as unset", (() => {
+  process.env.AGENT_SECRET = "too-short";
+  const refused = signPacketToken(STEP, 0) === null;
+  delete process.env.AGENT_SECRET;
+  return refused;
+})());
+process.env.AGENT_SECRET = savedSecret;
+
+/* -------------------------------------------------------------- packets -- */
+console.log("\n— Packets carry the constraints, not just the instruction —");
+
+const { reproductionGateFor, buildPacket, DENIED_PATHS, DIFF_BUDGET } =
+  await import("../src/lib/agent-packet.ts");
+
+check("a state defect is proven by a component test", reproductionGateFor("state", false) === "G5-A");
+check("a flow defect uses a browser where Playwright exists", reproductionGateFor("flow", true) === "G5-B");
+check(
+  "a flow defect degrades to component level without Playwright",
+  reproductionGateFor("flow", false) === "G5-A",
+);
+check("a visual defect gets the human gate", reproductionGateFor("visual", true) === "G5-C");
+check("an article run has no reproduction gate", reproductionGateFor(null, true) === null);
+
+check(
+  "dependency manifests are denied",
+  DENIED_PATHS.includes("package.json") && DENIED_PATHS.includes("requirements.txt"),
+);
+check("workflow files are denied", DENIED_PATHS.includes(".github/workflows/**"));
+check("env files are denied", DENIED_PATHS.includes(".env"));
+check("the diff budget is bounded", DIFF_BUDGET.maxFiles > 0 && DIFF_BUDGET.maxLines > 0);
+
+const fakeProject = {
+  id: "seoapp",
+  name: "SEO App",
+  description: "",
+  stack: ["Next.js"],
+  repo: "seoapp",
+  verify: { cmd: "pytest -q", hasPlaywright: false, measured: true },
+};
+const fakeRun = {
+  id: "run-1234567890",
+  source: "defect",
+  sourceId: "defect-1",
+  projectId: "seoapp",
+  baseSha: "abc1234",
+} as never;
+const fakeStep = {
+  id: "step-1",
+  runId: "run-1234567890",
+  idx: 0,
+  title: "Fix the timezone",
+  instruction: "do the thing",
+  acceptance: ["it works"],
+  attempt: 0,
+} as never;
+const fakeDefect = {
+  tier: "state",
+  severity: "high",
+  symptom: "shows 14:00",
+  visibleStrings: ["Booking confirmed"],
+  suspectedFiles: [],
+  route: "/book",
+  viewportWidth: 390,
+  viewportHeight: 844,
+  whatHappened: "wrong time",
+  whatExpected: "16:00",
+  reproSteps: null,
+} as never;
+
+const packet = buildPacket({
+  run: fakeRun,
+  step: fakeStep,
+  project: fakeProject as never,
+  defect: fakeDefect,
+  callbackUrl: "https://example.test/api/agent/callback",
+  dryRun: true,
+});
+check("the packet names its reproduction gate", packet.reproductionGate === "G5-A");
+check(
+  "a defect fix is told to write the failing test first",
+  packet.constraints.rules[0].includes("failing test FIRST"),
+);
+check(
+  "the packet tells the agent to grep the screenshot's strings",
+  packet.constraints.rules.some((r) => r.includes("visibleStrings")),
+);
+check("a defect branch is prefixed fix/", packet.branch.startsWith("fix/"));
+check("the packet carries the verify command", packet.project.verifyCmd === "pytest -q");
+
+let refusedWithoutContract = false;
+try {
+  buildPacket({
+    run: fakeRun,
+    step: fakeStep,
+    project: { ...fakeProject, verify: undefined } as never,
+    defect: null,
+    callbackUrl: "https://example.test/cb",
+    dryRun: true,
+  });
+} catch {
+  refusedWithoutContract = true;
+}
+check("a project with no verify contract cannot be packeted", refusedWithoutContract);
+
+let refusedWithoutBaseline = false;
+try {
+  buildPacket({
+    run: { ...(fakeRun as object), baseSha: null } as never,
+    step: fakeStep,
+    project: fakeProject as never,
+    defect: null,
+    callbackUrl: "https://example.test/cb",
+    dryRun: true,
+  });
+} catch {
+  refusedWithoutBaseline = true;
+}
+check("a run with no baseline cannot be packeted", refusedWithoutBaseline);
+
 console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

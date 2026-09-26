@@ -1,0 +1,35 @@
+# Idea Runner — per-repo caller.
+#
+# Copy this to `.github/workflows/idea-agent.yml` in a target repo. It is the
+# whole per-repo cost: the gate ladder itself lives once, in the monitoring
+# repo, so fixing a gate does not mean editing fourteen files.
+#
+# Install, per repo:
+#   1. Copy this file in as .github/workflows/idea-agent.yml
+#   2. Add the repository secret AGENT_SECRET (the same value MonitoringApp has)
+#   3. Make sure the repo has a `verify` contract in src/lib/projects.ts —
+#      without one G0 has nothing to measure and dispatch is refused
+#
+# One-time, on the monitoring repo: Settings → Actions → General →
+# "Access" → allow access from repositories owned by the user. A reusable
+# workflow in a private repo is not visible to other private repos until then,
+# and the symptom is a confusing "workflow was not found" on the caller.
+
+name: Idea Runner agent
+
+on:
+  repository_dispatch:
+    types: [idea-agent]
+
+jobs:
+  agent:
+    uses: Ofirm84u/monitoring/.github/workflows/idea-agent.yml@main
+    with:
+      run_id: ${{ github.event.client_payload.runId }}
+      step_id: ${{ github.event.client_payload.stepId }}
+      packet_token: ${{ github.event.client_payload.token }}
+      packet_url: ${{ github.event.client_payload.packetUrl }}
+      callback_url: ${{ github.event.client_payload.callbackUrl }}
+      dry_run: ${{ github.event.client_payload.dryRun }}
+    secrets:
+      AGENT_SECRET: ${{ secrets.AGENT_SECRET }}

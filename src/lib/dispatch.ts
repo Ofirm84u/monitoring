@@ -1,0 +1,247 @@
+import type { AgentRun, AgentStep } from "@/db/schema";
+import { PROJECTS } from "@/lib/projects";
+import { signPacketToken } from "@/lib/agent-auth";
+import { acquireProjectLock, getStep, releaseProjectLock, setRunBaseline, updateStep } from "@/lib/runs";
+import { getRun } from "@/lib/runs";
+import { branchNameFor } from "@/lib/agent-packet";
+
+/**
+ * Sending one step to GitHub Actions.
+ *
+ * The dispatch payload carries ids and a short-lived token and nothing else —
+ * the workflow fetches the real packet back from this app. `client_payload` is
+ * visible in the Actions UI and in webhook deliveries, so keeping plan text and
+ * defect detail out of it means the packet has exactly one authoritative copy
+ * and no sensitive context leaks into GitHub's logs.
+ */
+
+const GITHUB_USER = "Ofirm84u";
+const DISPATCH_EVENT = "idea-agent";
+const GITHUB_TIMEOUT_MS = 15_000;
+
+export type DispatchResult =
+  | { ok: true; branch: string; baseSha: string }
+  | {
+      ok: false;
+      reason:
+        | "unconfigured"
+        | "no_repo"
+        | "no_verify_contract"
+        | "locked"
+        | "baseline_unavailable"
+        | "dispatch_failed";
+      detail: string;
+    };
+
+function appBaseUrl(): string | null {
+  const url = process.env.APP_BASE_URL;
+  if (!url) return null;
+  return url.replace(/\/$/, "");
+}
+
+async function githubRequest(
+  path: string,
+  init?: RequestInit,
+): Promise<Response | null> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return null;
+  try {
+    return await fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** The commit the baseline will be measured at, resolved once per run. */
+async function resolveDefaultBranchHead(repo: string): Promise<string | null> {
+  const repoRes = await githubRequest(`/repos/${GITHUB_USER}/${repo}`);
+  if (!repoRes?.ok) return null;
+  const repoData = (await repoRes.json()) as { default_branch?: string };
+  const branch = repoData.default_branch;
+  if (!branch) return null;
+
+  const refRes = await githubRequest(
+    `/repos/${GITHUB_USER}/${repo}/commits/${branch}`,
+  );
+  if (!refRes?.ok) return null;
+  const commit = (await refRes.json()) as { sha?: string };
+  return commit.sha ?? null;
+}
+
+/**
+ * Dispatch one step.
+ *
+ * Takes the project lock first: two agents editing one checkout produce a diff
+ * neither step owns, which would make every gate below it meaningless. The lock
+ * is released again if anything after it fails, so a failed dispatch doesn't
+ * strand the repo.
+ */
+export async function dispatchStep(
+  stepId: string,
+  options?: { dryRun?: boolean },
+): Promise<DispatchResult> {
+  const dryRun = options?.dryRun ?? false;
+
+  const step = await getStep(stepId);
+  if (!step) return { ok: false, reason: "no_repo", detail: "Step not found" };
+
+  const run = await getRun(step.runId);
+  if (!run) return { ok: false, reason: "no_repo", detail: "Run not found" };
+
+  const project = PROJECTS.find((p) => p.id === run.projectId);
+  if (!project?.repo) {
+    return {
+      ok: false,
+      reason: "no_repo",
+      detail: `Project ${run.projectId} has no repo`,
+    };
+  }
+  if (!project.verify) {
+    return {
+      ok: false,
+      reason: "no_verify_contract",
+      detail: `${project.name} has no verify contract, so G0 has nothing to measure. Add one before running the agent here.`,
+    };
+  }
+
+  const base = appBaseUrl();
+  const token = signPacketToken(step.id, step.attempt);
+  if (!base || !token) {
+    return {
+      ok: false,
+      reason: "unconfigured",
+      detail: "APP_BASE_URL and AGENT_SECRET must both be set",
+    };
+  }
+
+  // Record the commit the run is anchored to before anything is dispatched.
+  // G0 measures at this SHA; without it, nothing later can be attributed.
+  let baseSha = run.baseSha;
+  if (!baseSha) {
+    baseSha = await resolveDefaultBranchHead(project.repo);
+    if (!baseSha) {
+      return {
+        ok: false,
+        reason: "baseline_unavailable",
+        detail: `Could not resolve the head of ${project.repo}'s default branch`,
+      };
+    }
+    await setRunBaseline(run.id, baseSha);
+  }
+
+  const gotLock = await acquireProjectLock(project.id, step.id);
+  if (!gotLock) {
+    return {
+      ok: false,
+      reason: "locked",
+      detail: `Another step is already running against ${project.name}`,
+    };
+  }
+
+  const branch = branchNameFor({ ...run, baseSha } as AgentRun, step as AgentStep);
+
+  const res = await githubRequest(`/repos/${GITHUB_USER}/${project.repo}/dispatches`, {
+    method: "POST",
+    body: JSON.stringify({
+      event_type: DISPATCH_EVENT,
+      client_payload: {
+        runId: run.id,
+        stepId: step.id,
+        token,
+        packetUrl: `${base}/api/agent/packet/${step.id}`,
+        callbackUrl: `${base}/api/agent/callback`,
+        dryRun,
+      },
+    }),
+  });
+
+  if (!res || res.status !== 204) {
+    await releaseProjectLock(project.id);
+    const detail = res
+      ? `GitHub returned ${res.status}`
+      : "GitHub request failed or GITHUB_TOKEN is unset";
+    return { ok: false, reason: "dispatch_failed", detail };
+  }
+
+  await updateStep(step.id, { status: "dispatched", branch });
+  return { ok: true, branch, baseSha };
+}
+
+/**
+ * Landing or discarding a step's pull request.
+ *
+ * Both paths release the project lock, because either way the step has settled
+ * and the next one may start. Neither is ever called by the agent: the only
+ * caller is the decision endpoint, which requires a redeemed single-use token.
+ */
+
+export type PrActionResult = { ok: true } | { ok: false; detail: string };
+
+export async function mergePullRequest(
+  repo: string,
+  prNumber: number,
+  title: string,
+): Promise<PrActionResult> {
+  const res = await githubRequest(
+    `/repos/${GITHUB_USER}/${repo}/pulls/${prNumber}/merge`,
+    {
+      method: "PUT",
+      // Squash: one plan step should land as one commit, so a revert is one revert.
+      body: JSON.stringify({ merge_method: "squash", commit_title: title }),
+    },
+  );
+  if (!res) return { ok: false, detail: "GitHub request failed" };
+  if (!res.ok) {
+    const body = await res.text();
+    return { ok: false, detail: `GitHub returned ${res.status}: ${body.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+export async function closePullRequest(
+  repo: string,
+  prNumber: number,
+): Promise<PrActionResult> {
+  const res = await githubRequest(`/repos/${GITHUB_USER}/${repo}/pulls/${prNumber}`, {
+    method: "PATCH",
+    body: JSON.stringify({ state: "closed" }),
+  });
+  if (!res?.ok) return { ok: false, detail: `Could not close PR #${prNumber}` };
+  return { ok: true };
+}
+
+/**
+ * Delete a step's branch.
+ *
+ * Only ever the agent's own `idea/` or `fix/` branch, and never a force-push or
+ * a default-branch operation — rejecting a step must not be able to destroy
+ * anything a human made.
+ */
+export async function deleteAgentBranch(
+  repo: string,
+  branch: string,
+): Promise<PrActionResult> {
+  if (!branch.startsWith("idea/") && !branch.startsWith("fix/")) {
+    return { ok: false, detail: `Refusing to delete a branch the agent did not create: ${branch}` };
+  }
+  const res = await githubRequest(
+    `/repos/${GITHUB_USER}/${repo}/git/refs/heads/${branch}`,
+    { method: "DELETE" },
+  );
+  if (!res) return { ok: false, detail: "GitHub request failed" };
+  // 422 means it is already gone, which is the state we wanted.
+  if (!res.ok && res.status !== 422) {
+    return { ok: false, detail: `Could not delete ${branch} (${res.status})` };
+  }
+  return { ok: true };
+}
