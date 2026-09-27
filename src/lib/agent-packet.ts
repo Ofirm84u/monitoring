@@ -68,6 +68,7 @@ export interface AgentPacket {
     stack: string[];
     verifyCmd: string;
     setupCmd: string | null;
+    smokeCmd: string | null;
     pythonVersion: string;
     hasPlaywright: boolean;
   };
@@ -93,7 +94,22 @@ export interface AgentPacket {
   callbackUrl: string;
   /** Where G2 and G4 are evaluated; both live server-side, not in workflow bash. */
   reviewUrl: string;
+  /**
+   * The prompt handed to the implementer, built here rather than assembled in
+   * workflow bash so there is one definition of what the agent is told and it
+   * can be asserted on in tests.
+   */
+  implementerPrompt: string;
 }
+
+/**
+ * Commit-message prefix the reproduction test must carry.
+ *
+ * G5 finds the test commit by this prefix and cherry-picks it onto the baseline
+ * to prove it fails there. Without a reliable marker the gate would have to
+ * guess which commit is the test, and a wrong guess makes the proof worthless.
+ */
+export const TEST_COMMIT_PREFIX = "test(idea-runner):";
 
 /**
  * Which gate can prove this defect fixed.
@@ -210,6 +226,7 @@ export function buildPacket(input: {
       stack: project.stack,
       verifyCmd: project.verify.cmd,
       setupCmd: project.verify.setupCmd ?? null,
+      smokeCmd: project.verify.smokeCmd ?? null,
       pythonVersion: project.verify.pythonVersion ?? "3.12",
       hasPlaywright: project.verify.hasPlaywright,
     },
@@ -231,5 +248,131 @@ export function buildPacket(input: {
     },
     callbackUrl,
     reviewUrl: callbackUrl.replace(/\/callback$/, "/review"),
+    implementerPrompt: buildImplementerPrompt({
+      project,
+      step,
+      defect: defectContext,
+      reproductionGate,
+      rules: buildRules(defectContext, reproductionGate),
+    }),
   };
+}
+
+/**
+ * What the implementer is actually told.
+ *
+ * Written as instructions to an engineer with no context beyond this text: it
+ * cannot see the plan it came from, the conversation that produced it, or any
+ * earlier step. Everything it may rely on is here, and everything absent is
+ * something it must ask about rather than assume.
+ */
+export function buildImplementerPrompt(input: {
+  project: ProjectConfig;
+  step: AgentStep;
+  defect: DefectContext | null;
+  reproductionGate: AgentPacket["reproductionGate"];
+  rules: string[];
+}): string {
+  const { project, step, defect, reproductionGate, rules } = input;
+  const sections: string[] = [];
+
+  sections.push(
+    `You are making one focused change to ${project.name} (${project.stack.join(", ")}).`,
+  );
+
+  sections.push(`## The change\n\n### ${step.title}\n\n${step.instruction}`);
+
+  if (defect) {
+    const lines = [
+      `This step fixes a defect reported through the interface.`,
+      ``,
+      `- **Reported:** ${defect.whatHappened}`,
+    ];
+    if (defect.whatExpected) lines.push(`- **Expected:** ${defect.whatExpected}`);
+    if (defect.reproSteps) lines.push(`- **Steps:** ${defect.reproSteps}`);
+    if (defect.symptom) lines.push(`- **Triage:** ${defect.symptom}`);
+    if (defect.route) lines.push(`- **Route:** ${defect.route}`);
+    if (defect.viewport) {
+      lines.push(`- **Viewport:** ${defect.viewport.width}x${defect.viewport.height}`);
+    }
+    if (defect.visibleStrings.length > 0) {
+      lines.push(
+        ``,
+        `**Text read from the screenshot.** Grep the repository for these to find`,
+        `the component that rendered it. They are exact, and they are a more`,
+        `reliable index than any guess about file layout:`,
+        ...defect.visibleStrings.map((s) => `  - ${JSON.stringify(s)}`),
+      );
+    }
+    if (defect.suspectedFiles.length > 0) {
+      lines.push(
+        ``,
+        `Triage suspected these files, but did not have the repository. Verify`,
+        `before trusting them:`,
+        ...defect.suspectedFiles.map((f) => `  - ${f}`),
+      );
+    }
+    sections.push(`## The defect\n\n${lines.join("\n")}`);
+  }
+
+  if (reproductionGate === "G5-A" || reproductionGate === "G5-B") {
+    const kind =
+      reproductionGate === "G5-B"
+        ? "a browser test (Playwright)"
+        : "a component or unit test";
+    sections.push(
+      [
+        `## Prove it, before you fix it`,
+        ``,
+        `Your **first commit** must be ${kind} that reproduces this bug, and its`,
+        `message must start with \`${TEST_COMMIT_PREFIX}\`. Commit the test on its own,`,
+        `with no fix alongside it.`,
+        ``,
+        `That commit will be applied to the unchanged baseline and the suite run`,
+        `there. If it passes at the baseline, the test never reproduced the bug and`,
+        `the fix is rejected as unproven — so write a test that genuinely fails`,
+        `first. Make the fix in a later commit.`,
+      ].join("\n"),
+    );
+  }
+
+  if (reproductionGate === "G5-C") {
+    sections.push(
+      [
+        `## This defect is visual`,
+        ``,
+        `No assertion can express "it looks wrong", so do not invent a test that`,
+        `pretends to. Make the fix, then state plainly in your final message which`,
+        `route and viewport should be rendered to compare before and after. A`,
+        `person will look at the two images and decide.`,
+      ].join("\n"),
+    );
+  }
+
+  if (step.acceptance && step.acceptance.length > 0) {
+    sections.push(
+      `## This will be reviewed against\n\n${step.acceptance.map((c) => `- ${c}`).join("\n")}`,
+    );
+  }
+
+  sections.push(
+    [
+      `## Rules`,
+      ``,
+      ...rules.map((r) => `- ${r}`),
+      ``,
+      `**Never edit these paths.** A change to any of them is refused by a gate,`,
+      `not by review, so the work would be discarded:`,
+      ...DENIED_PATHS.map((p) => `  - \`${p}\``),
+      ``,
+      `Keep the change under ${DIFF_BUDGET.maxFiles} files and ${DIFF_BUDGET.maxLines} changed lines.`,
+      `Past either bound the step is no longer the step that was planned, and it`,
+      `stops for a human rather than proceeding.`,
+      ``,
+      `Verification runs \`${project.verify?.cmd ?? ""}\`. It passed on the baseline`,
+      `before you started, so any failure it reports afterwards is yours.`,
+    ].join("\n"),
+  );
+
+  return sections.join("\n\n");
 }

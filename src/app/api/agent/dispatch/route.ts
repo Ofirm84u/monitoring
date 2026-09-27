@@ -18,6 +18,7 @@ const RATE_LIMIT = { maxAttempts: 20, windowMs: 60 * 1000 };
 const CLIENT_ERROR_REASONS = new Set([
   "no_repo",
   "no_verify_contract",
+  "unmeasured_baseline",
   "locked",
 ]);
 

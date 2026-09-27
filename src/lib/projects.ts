@@ -31,6 +31,13 @@ export interface VerifyContract {
    */
   pythonVersion?: string;
   /**
+   * G3 — starts the app and asserts it actually responds, run at the baseline
+   * and again on the branch. Absent means G3 records a skip naming this field:
+   * a build passing is not evidence that the app still works, and a smoke check
+   * that does not exercise the running app would be worse than an honest gap.
+   */
+  smokeCmd?: string;
+  /**
    * Polled after deploy and compared against the G0 snapshot. Only set where a
    * real health endpoint is known — a homepage that returns 200 while the app is
    * broken would make the comparison worse than having none.

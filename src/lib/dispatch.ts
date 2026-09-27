@@ -27,6 +27,7 @@ export type DispatchResult =
         | "unconfigured"
         | "no_repo"
         | "no_verify_contract"
+        | "unmeasured_baseline"
         | "locked"
         | "baseline_unavailable"
         | "dispatch_failed";
@@ -111,6 +112,18 @@ export async function dispatchStep(
       ok: false,
       reason: "no_verify_contract",
       detail: `${project.name} has no verify contract, so G0 has nothing to measure. Add one before running the agent here.`,
+    };
+  }
+
+  // The implementer only runs where the baseline has actually been observed
+  // green, not merely declared. Everything the gates conclude rests on that
+  // measurement; a project whose verify command has never been seen to pass
+  // can still do a dry run, which is how it gets measured in the first place.
+  if (!dryRun && !project.verify.measured) {
+    return {
+      ok: false,
+      reason: "unmeasured_baseline",
+      detail: `${project.name}'s verify command has never been observed passing. Run a dry run first — it measures G0 — then set measured: true.`,
     };
   }
 

@@ -624,5 +624,136 @@ check(
   isReadyForDecision([{ gate: "G1", status: "fail" }, { gate: "G1", status: "pass" }]).ready,
 );
 
+/* --------------------------------------------------- smoke + implementer -- */
+console.log("\n— G3 and the implementer prompt —");
+
+const { evaluateSmoke } = await import("../src/lib/gates.ts");
+
+check(
+  "no smoke contract records a skip, not a pass",
+  evaluateSmoke(null, null, null).status === "skip",
+);
+check(
+  "the skip names what is missing",
+  evaluateSmoke(null, null, null).summary.includes("smokeCmd"),
+);
+check(
+  "app up on the branch passes",
+  evaluateSmoke("./smoke.sh", true, true).status === "pass",
+);
+check(
+  "app down on the branch but up at baseline fails",
+  evaluateSmoke("./smoke.sh", true, false).status === "fail",
+);
+check(
+  "an app already down at the baseline does not blame the change",
+  evaluateSmoke("./smoke.sh", false, false).status === "skip",
+);
+check(
+  "G3 failure says the suite passed anyway",
+  evaluateSmoke("./smoke.sh", true, false).summary.includes("suite passes"),
+);
+
+const { buildImplementerPrompt, TEST_COMMIT_PREFIX } = await import(
+  "../src/lib/agent-packet.ts"
+);
+
+const promptProject = {
+  id: "seoapp",
+  name: "SEO App",
+  description: "",
+  stack: ["Next.js", "FastAPI"],
+  repo: "seoapp",
+  verify: { cmd: "pytest -q", hasPlaywright: false, measured: true },
+} as never;
+const promptStep = {
+  id: "s1",
+  title: "Fix the booking timezone",
+  instruction: "Convert to the venue timezone before formatting.",
+  acceptance: ["The displayed slot matches the slot selected"],
+} as never;
+const promptDefect = {
+  tier: "state",
+  severity: "high",
+  symptom: "Shows 14:00 where 16:00 was chosen",
+  visibleStrings: ["Booking confirmed", "14:00"],
+  suspectedFiles: ["apps/web/src/components/slot.tsx"],
+  route: "/book",
+  viewport: { width: 390, height: 844 },
+  whatHappened: "Wrong time shown",
+  whatExpected: "16:00",
+  reproSteps: "Pick 16:00, confirm",
+} as never;
+
+const statePrompt = buildImplementerPrompt({
+  project: promptProject,
+  step: promptStep,
+  defect: promptDefect,
+  reproductionGate: "G5-A",
+  rules: ["Change only what this step describes."],
+});
+
+check("the prompt states the change", statePrompt.includes("Fix the booking timezone"));
+check("the prompt carries the instruction", statePrompt.includes("venue timezone"));
+check(
+  "the prompt demands the test commit prefix",
+  statePrompt.includes(TEST_COMMIT_PREFIX),
+);
+check(
+  "the prompt explains why the test must fail first",
+  statePrompt.includes("never reproduced the bug"),
+);
+check(
+  "the prompt passes on the screenshot's strings",
+  statePrompt.includes("Booking confirmed"),
+);
+check(
+  "suspected files are marked as unverified",
+  statePrompt.includes("Verify") && statePrompt.includes("slot.tsx"),
+);
+check("the prompt lists the denied paths", statePrompt.includes("package.json"));
+check("the prompt states the diff budget", statePrompt.includes("400 changed lines"));
+check(
+  "the prompt names the verify command",
+  statePrompt.includes("pytest -q"),
+);
+check(
+  "the prompt carries the acceptance criteria",
+  statePrompt.includes("The displayed slot matches"),
+);
+
+const visualPrompt = buildImplementerPrompt({
+  project: promptProject,
+  step: promptStep,
+  defect: { ...(promptDefect as object), tier: "visual" } as never,
+  reproductionGate: "G5-C",
+  rules: [],
+});
+check(
+  "a visual defect is told not to fake a test",
+  visualPrompt.includes("do not invent a test"),
+);
+check(
+  "a visual defect asks for a route and viewport instead",
+  visualPrompt.includes("route and viewport"),
+);
+check(
+  "a visual defect is not told to write a failing test",
+  !visualPrompt.includes(TEST_COMMIT_PREFIX),
+);
+
+const articlePrompt = buildImplementerPrompt({
+  project: promptProject,
+  step: promptStep,
+  defect: null,
+  reproductionGate: null,
+  rules: [],
+});
+check("an article step has no defect section", !articlePrompt.includes("The defect"));
+check(
+  "an article step is not asked for a reproduction test",
+  !articlePrompt.includes(TEST_COMMIT_PREFIX),
+);
+
 console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

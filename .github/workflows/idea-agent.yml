@@ -4,22 +4,26 @@
 # so a fix to the gate ladder happens in one place instead of fourteen. A caller
 # is ~15 lines; see docs/idea-agent-caller.yml.
 #
-# Gate ladder, in the order it runs:
-#   G0  baseline — the verify command at the run's base commit, BEFORE anything
-#       is changed. A red baseline aborts the run: breakage that was already
-#       there cannot be attributed to a change that has not happened yet.
-#   G1  static   — the same command on the branch.
-#   G2  scope    — diff budget and path denylist, evaluated server-side.
-#   G4  accept   — acceptance review against the QA plan's criteria, also
-#       server-side so the API key lives in one place, not fourteen.
+# The ladder, in the order it runs:
+#   G0     baseline    — verify command at the base commit, before anything is
+#                        changed. Red aborts the run: breakage that was already
+#                        there cannot be blamed on a change yet to happen.
+#   G3(a)  smoke base  — does the app start and answer at the baseline?
+#   ——— the implementer runs here (or an empty commit, on a dry run) ———
+#   G1     static      — the same verify command on the branch.
+#   G3(b)  smoke head  — does it still start and answer?
+#   G5-A/B reproduction— the test commit is cherry-picked onto the baseline and
+#                        must FAIL there, then pass on the branch. A test that
+#                        only passes on the fix branch proves nothing.
+#   G2/G4  scope+accept— evaluated server-side, where the policy has one copy.
 #
-# G3 (behavioural smoke) and G5 (reproduction proof) arrive with the
-# implementer. Until then the change under test is an EMPTY COMMIT: this
-# workflow refuses to run with dry_run false, because a pull request that
-# nothing verified is the failure mode the pipeline exists to prevent.
+# The runner reports observations for G3 and G5; the server decides the verdict.
+# A runner that judged for itself could report "the test passes" as success when
+# what it means is "the test never failed".
 #
-# Required secret in the calling repo:
-#   AGENT_SECRET — shared with MonitoringApp; signs callbacks and packet tokens.
+# Secrets in the calling repo:
+#   AGENT_SECRET      — shared with MonitoringApp; signs callbacks and tokens.
+#   ANTHROPIC_API_KEY — only needed for real runs, not dry runs.
 
 name: Idea Runner agent
 
@@ -47,6 +51,8 @@ on:
     secrets:
       AGENT_SECRET:
         required: true
+      ANTHROPIC_API_KEY:
+        required: false
 
 concurrency:
   # One agent run per repo. The database lock already enforces this, but a
@@ -57,7 +63,7 @@ concurrency:
 jobs:
   agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
@@ -68,20 +74,24 @@ jobs:
       STEP_ID: ${{ inputs.step_id }}
 
     steps:
-      - name: Refuse to run an unverified implementer
+      - name: Require an API key for a real run
         if: ${{ !inputs.dry_run }}
+        env:
+          # The `secrets` context is not available in a step-level `if`, so the
+          # check happens here rather than in the condition.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          echo "::error::This workflow only runs in dry-run mode."
-          echo "The implementer arrives with G3 and G5. Opening a PR with"
-          echo "model-written code and no reproduction proof is the failure mode"
-          echo "this pipeline is built to avoid."
-          exit 1
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "::error::ANTHROPIC_API_KEY is not set in this repository."
+            echo "A real run needs it for the implementer. A dry run does not."
+            exit 1
+          fi
 
-      # Signing helper, written once and reused by every POST below. It signs
-      # the exact bytes it sends: the payload is stripped of its trailing
+      # Signing helpers, written once and reused by every POST below. They sign
+      # the exact bytes they send: the payload is stripped of its trailing
       # newline first, because the server verifies the raw request body and a
       # stray byte would make every signature fail for no visible reason.
-      - name: Install the signed-POST helper
+      - name: Install the signed-POST helpers
         run: |
           set -euo pipefail
           cat > "${RUNNER_TEMP}/post-signed.sh" <<'SCRIPT'
@@ -101,7 +111,6 @@ jobs:
           SCRIPT
           chmod +x "${RUNNER_TEMP}/post-signed.sh"
 
-          # Reporting one gate result is the most repeated action here.
           cat > "${RUNNER_TEMP}/report-gate.sh" <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -139,9 +148,13 @@ jobs:
             echo "title=$(jq -r '.packet.step.title' packet.json)"
             echo "verify_cmd=$(jq -r '.packet.project.verifyCmd' packet.json)"
             echo "setup_cmd=$(jq -r '.packet.project.setupCmd // ""' packet.json)"
+            echo "smoke_cmd=$(jq -r '.packet.project.smokeCmd // ""' packet.json)"
             echo "python_version=$(jq -r '.packet.project.pythonVersion' packet.json)"
             echo "review_url=$(jq -r '.packet.reviewUrl' packet.json)"
+            echo "repro_gate=$(jq -r '.packet.reproductionGate // ""' packet.json)"
           } >> "$GITHUB_OUTPUT"
+          # Multi-line, so it goes to a file rather than through an output.
+          jq -r '.packet.implementerPrompt' packet.json > "${RUNNER_TEMP}/prompt.md"
 
       - name: Check out the baseline commit
         uses: actions/checkout@v4
@@ -186,11 +199,65 @@ jobs:
           else
             "${RUNNER_TEMP}/report-gate.sh" G0 fail \
               "Baseline is RED at ${BASE_SHA} (exit ${code}) — breakage cannot be attributed, so the run is aborted" g0.log
-            echo "::error::Baseline is red. Fix main before running the agent here."
+            echo "::error::Baseline is red. Fix the default branch before running the agent here."
             exit 1
           fi
 
-      - name: Open a pull request from an empty commit
+      - name: G3a — does the app come up at the baseline?
+        id: smoke_base
+        if: ${{ steps.packet.outputs.smoke_cmd != '' }}
+        env:
+          SMOKE_CMD: ${{ steps.packet.outputs.smoke_cmd }}
+        run: |
+          set -uo pipefail
+          eval "${SMOKE_CMD}" > g3-base.log 2>&1 && ok=true || ok=false
+          echo "baseline_ok=${ok}" >> "$GITHUB_OUTPUT"
+
+      - name: Create the branch
+        env:
+          BRANCH: ${{ steps.packet.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "idea-runner[bot]"
+          git config user.email "idea-runner@users.noreply.github.com"
+          git switch -c "${BRANCH}"
+
+      - name: Empty commit (dry run)
+        if: ${{ inputs.dry_run }}
+        run: |
+          git commit --allow-empty -m "chore(idea-runner): round-trip check"
+
+      - name: Run the implementer
+        if: ${{ !inputs.dry_run }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code
+          # bypassPermissions because -p is non-interactive and any prompt would
+          # hang the run. The real enforcement is not the CLI's permission model
+          # but G2: this is a disposable runner holding only the repo, and a
+          # change to a denied path is refused server-side regardless of what
+          # happened in here. Web tools are off so nothing outside the packet and
+          # the repository can steer the change.
+          claude -p "$(cat "${RUNNER_TEMP}/prompt.md")" \
+            --permission-mode bypassPermissions \
+            --disallowed-tools "WebFetch WebSearch" \
+            --output-format text \
+            | tee implementer.log
+
+          if [[ -z "$(git status --porcelain)" && -z "$(git log --oneline "${{ steps.packet.outputs.base_sha }}"..HEAD)" ]]; then
+            echo "::error::The implementer produced no change at all"
+            exit 1
+          fi
+          # Anything left uncommitted is still part of the change; commit it so
+          # the diff the gates read is the diff that would merge.
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git add -A
+            git commit -m "feat(idea-runner): ${{ steps.packet.outputs.title }}"
+          fi
+
+      - name: Push and open a pull request
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,31 +265,33 @@ jobs:
           TITLE: ${{ steps.packet.outputs.title }}
           BASE_SHA: ${{ steps.packet.outputs.base_sha }}
           RUN_ID: ${{ inputs.run_id }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          git config user.name "idea-runner[bot]"
-          git config user.email "idea-runner@users.noreply.github.com"
-          git switch -c "${BRANCH}"
-          git commit --allow-empty -m "chore(idea-runner): round-trip check"
           git push --set-upstream origin "${BRANCH}"
 
           {
-            echo "Round-trip check from the Idea Runner."
-            echo
-            echo "**This PR contains no changes.** It is an empty commit proving"
-            echo "that dispatch, the gate ladder and the signed callbacks all"
-            echo "work before any model is allowed to write code."
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Round-trip check from the Idea Runner."
+              echo
+              echo "**This PR contains no changes.** It is an empty commit proving"
+              echo "that dispatch, the gate ladder and the signed callbacks work"
+              echo "before any model is allowed to write code."
+            else
+              echo "Opened by the Idea Runner. Gate results are posted back to the"
+              echo "dashboard; **nothing merges without an explicit approval**."
+            fi
             echo
             echo "- Run: \`${RUN_ID}\`"
             echo "- Step: \`${STEP_ID}\`"
             echo "- Baseline: \`${BASE_SHA}\`"
-            echo
-            echo "Safe to close."
           } > pr-body.md
 
+          title_prefix=""
+          [[ "${DRY_RUN}" == "true" ]] && title_prefix="[dry run] "
           default_branch="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
           gh pr create --base "${default_branch}" --head "${BRANCH}" \
-            --title "[dry run] ${TITLE}" --body-file pr-body.md
+            --title "${title_prefix}${TITLE}" --body-file pr-body.md
           {
             echo "number=$(gh pr view "${BRANCH}" --json number -q .number)"
             echo "head_sha=$(git rev-parse HEAD)"
@@ -239,16 +308,77 @@ jobs:
             '{stepId:$stepId, event:"implemented", branch:$branch, prNumber:$prNumber, headSha:$headSha}')"
 
       - name: G1 — the same command on the branch
+        id: g1
         env:
           VERIFY_CMD: ${{ steps.packet.outputs.verify_cmd }}
         run: |
           set -uo pipefail
           eval "${VERIFY_CMD}" > g1.log 2>&1 && code=0 || code=$?
+          echo "passed=$([[ ${code} -eq 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           if [[ ${code} -eq 0 ]]; then
             "${RUNNER_TEMP}/report-gate.sh" G1 pass "Verify command passes on the branch" g1.log
           else
             "${RUNNER_TEMP}/report-gate.sh" G1 fail \
               "Verify command fails on the branch (exit ${code}) while the baseline was green" g1.log
+            exit 1
+          fi
+
+      - name: G3b — does the app still come up?
+        if: ${{ always() && steps.packet.outputs.smoke_cmd != '' && steps.g1.conclusion != 'skipped' }}
+        env:
+          SMOKE_CMD: ${{ steps.packet.outputs.smoke_cmd }}
+          SMOKE_LABEL: ${{ steps.packet.outputs.smoke_cmd }}
+          BASELINE_OK: ${{ steps.smoke_base.outputs.baseline_ok }}
+        run: |
+          set -uo pipefail
+          eval "${SMOKE_CMD}" > g3-head.log 2>&1 && head_ok=true || head_ok=false
+          # Observations only — evaluateSmoke on the server decides the verdict,
+          # including the case where the app was already down at the baseline.
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
+            --arg stepId "${STEP_ID}" --arg cmd "${SMOKE_LABEL}" \
+            --argjson baselineOk "${BASELINE_OK:-null}" --argjson headOk "${head_ok}" \
+            '{stepId:$stepId, event:"gate", gate:{gate:"G3", smoke:{smokeCmd:$cmd, baselineOk:$baselineOk, headOk:$headOk}}}')"
+
+      - name: G5 — the test must fail at the baseline
+        if: ${{ !inputs.dry_run && (steps.packet.outputs.repro_gate == 'G5-A' || steps.packet.outputs.repro_gate == 'G5-B') }}
+        env:
+          VERIFY_CMD: ${{ steps.packet.outputs.verify_cmd }}
+          BASE_SHA: ${{ steps.packet.outputs.base_sha }}
+          REPRO_GATE: ${{ steps.packet.outputs.repro_gate }}
+          PASSED_AT_HEAD: ${{ steps.g1.outputs.passed }}
+        run: |
+          set -uo pipefail
+          # The implementer was told to commit the reproduction test on its own,
+          # prefixed so it can be found. Applying just that commit to the
+          # untouched baseline is what turns "the test passes" into proof.
+          test_commit="$(git log --reverse --format='%H %s' "${BASE_SHA}"..HEAD \
+            | grep -F 'test(idea-runner):' | head -1 | cut -d' ' -f1)"
+
+          if [[ -z "${test_commit}" ]]; then
+            echo "::error::No commit prefixed 'test(idea-runner):' — the reproduction test is missing, so the fix cannot be proven"
+            exit 1
+          fi
+
+          git switch --detach "${BASE_SHA}"
+          if ! git cherry-pick --no-commit "${test_commit}"; then
+            echo "::error::The reproduction test does not apply to the baseline on its own"
+            git cherry-pick --abort || true
+            exit 1
+          fi
+
+          eval "${VERIFY_CMD}" > g5.log 2>&1 && base_code=0 || base_code=$?
+          failed_at_base=$([[ ${base_code} -ne 0 ]] && echo true || echo false)
+          git checkout -- . && git clean -fd
+          git switch "${{ steps.packet.outputs.branch }}"
+
+          "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
+            --arg stepId "${STEP_ID}" --arg g "${REPRO_GATE}" \
+            --argjson failedAtBase "${failed_at_base}" \
+            --argjson passedAtHead "${PASSED_AT_HEAD}" \
+            '{stepId:$stepId, event:"gate", gate:{gate:$g, reproduction:{failedAtBase:$failedAtBase, passedAtHead:$passedAtHead}}}')"
+
+          if [[ "${failed_at_base}" != "true" ]]; then
+            echo "::error::The test passes at the baseline too, so it never reproduced the bug"
             exit 1
           fi
 

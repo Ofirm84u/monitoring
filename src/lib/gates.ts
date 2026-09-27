@@ -238,3 +238,55 @@ export function isReadyForDecision(
 
   return { ready: blockedBy.length === 0, blockedBy };
 }
+
+/**
+ * G3 — behavioural smoke.
+ *
+ * G1 proves the suite passes; it does not prove the application starts and
+ * answers. Those are different failures, and the second is the one users see.
+ * Like G5, the meaningful signal is the pair: the comparison is against the
+ * baseline, so an app that was already failing to start does not fail the
+ * change that happened to be in flight.
+ */
+export function evaluateSmoke(
+  smokeCmd: string | null,
+  baselineOk: boolean | null,
+  headOk: boolean | null,
+): GateVerdict {
+  if (!smokeCmd) {
+    return {
+      gate: "G3",
+      status: "skip",
+      summary:
+        "No smokeCmd in this project's verify contract, so nothing checks that the app still starts and answers. G1 passing is not evidence of that.",
+      evidence: { smokeCmd: null },
+    };
+  }
+
+  const evidence = { smokeCmd, baselineOk, headOk };
+
+  if (baselineOk === false) {
+    return {
+      gate: "G3",
+      status: "skip",
+      summary:
+        "The app did not come up at the baseline either, so this change cannot be blamed. Fix the baseline before reading G3 here.",
+      evidence,
+    };
+  }
+  if (headOk === true) {
+    return {
+      gate: "G3",
+      status: "pass",
+      summary: "The app starts and answers on the branch, as it did at the baseline",
+      evidence,
+    };
+  }
+  return {
+    gate: "G3",
+    status: "fail",
+    summary:
+      "The app came up at the baseline but not on the branch — the suite passes and the application is still broken",
+    evidence,
+  };
+}

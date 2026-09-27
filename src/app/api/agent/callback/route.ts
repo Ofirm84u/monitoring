@@ -16,6 +16,7 @@ import {
   updateStep,
 } from "@/lib/runs";
 import { GATES, type CheckStatus, type Gate } from "@/db/schema";
+import { evaluateReproduction, evaluateSmoke } from "@/lib/gates";
 
 /**
  * Where the workflow reports back.
@@ -61,6 +62,10 @@ interface CallbackBody {
     summary?: string;
     evidence?: unknown;
     durationMs?: number;
+    /** G5-A / G5-B report observations; the verdict is decided server-side. */
+    reproduction?: { failedAtBase?: boolean; passedAtHead?: boolean };
+    /** G3 likewise. */
+    smoke?: { smokeCmd?: string; baselineOk?: boolean; headOk?: boolean };
   };
   question?: string;
   error?: string;
@@ -120,10 +125,43 @@ export async function POST(request: Request) {
 
     case "gate": {
       const gate = body.gate?.gate;
-      const status = body.gate?.status;
       if (!gate || !GATE_SET.has(gate)) {
         return json(400, { error: `Unknown gate: ${String(gate)}` });
       }
+
+      // For G3 and G5 the workflow reports what it observed, and the verdict is
+      // decided here. The interesting question in both is a comparison against
+      // the baseline, and a runner that judged it for itself could report "the
+      // test passes" as a success when what it means is "the test never failed".
+      if (gate === "G5-A" || gate === "G5-B") {
+        const repro = body.gate?.reproduction;
+        if (
+          typeof repro?.failedAtBase !== "boolean" ||
+          typeof repro?.passedAtHead !== "boolean"
+        ) {
+          return json(400, {
+            error: "A reproduction gate must report failedAtBase and passedAtHead",
+          });
+        }
+        const verdict = evaluateReproduction(gate, repro.failedAtBase, repro.passedAtHead);
+        await recordCheck({ stepId: step.id, ...verdict });
+        return json(200, { ok: true, verdict });
+      }
+
+      if (gate === "G3") {
+        const smoke = body.gate?.smoke;
+        const verdict = evaluateSmoke(
+          typeof smoke?.smokeCmd === "string" ? smoke.smokeCmd : null,
+          typeof smoke?.baselineOk === "boolean" ? smoke.baselineOk : null,
+          typeof smoke?.headOk === "boolean" ? smoke.headOk : null,
+        );
+        await recordCheck({ stepId: step.id, ...verdict });
+        return json(200, { ok: true, verdict });
+      }
+
+      // G0 and G1 are a single command's exit code, so the runner's own result
+      // is the observation and the verdict at once.
+      const status = body.gate?.status;
       if (!status || !CHECK_STATUS_SET.has(status)) {
         return json(400, { error: `Unknown check status: ${String(status)}` });
       }
