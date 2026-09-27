@@ -7,13 +7,16 @@
 # Install, per repo:
 #   1. Copy this file in as .github/workflows/idea-agent.yml
 #   2. Add the repository secret AGENT_SECRET (the same value MonitoringApp has)
-#   3. Make sure the repo has a `verify` contract in src/lib/projects.ts —
-#      without one G0 has nothing to measure and dispatch is refused
+#   3. Add ANTHROPIC_API_KEY — only needed for real runs; a dry run works without
+#   4. Give the project a `verify` contract in src/lib/projects.ts. Without one
+#      G0 has nothing to measure and dispatch is refused. A real run additionally
+#      needs `measured: true`, which a dry run is what establishes.
 #
-# One-time, on the monitoring repo: Settings → Actions → General →
-# "Access" → allow access from repositories owned by the user. A reusable
-# workflow in a private repo is not visible to other private repos until then,
-# and the symptom is a confusing "workflow was not found" on the caller.
+# This file must live on the repo's DEFAULT branch. `repository_dispatch` only
+# triggers workflows there, and a caller on a feature branch simply never fires.
+#
+# No setting is needed on the monitoring repo: it is public, so its reusable
+# workflows are callable as-is.
 
 name: Idea Runner agent
 
@@ -23,6 +26,8 @@ on:
 
 jobs:
   agent:
+    # While testing, point this at the branch the workflow lives on
+    # (…/idea-agent.yml@feat/idea-runner) until it has merged to main.
     uses: Ofirm84u/monitoring/.github/workflows/idea-agent.yml@main
     with:
       run_id: ${{ github.event.client_payload.runId }}
@@ -33,3 +38,6 @@ jobs:
       dry_run: ${{ github.event.client_payload.dryRun }}
     secrets:
       AGENT_SECRET: ${{ secrets.AGENT_SECRET }}
+      # Unset is fine for dry runs; the workflow fails with a clear message if a
+      # real run reaches it without one.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
