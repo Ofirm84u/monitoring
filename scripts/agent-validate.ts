@@ -755,5 +755,86 @@ check(
   !articlePrompt.includes(TEST_COMMIT_PREFIX),
 );
 
+/* ------------------------------------------------------- defect -> run -- */
+console.log("\n— A triaged defect becomes a workable step —");
+
+const { buildDefectStep, defectBlockedReason } = await import(
+  "../src/lib/defect-run.ts"
+);
+
+const baseDefect = {
+  id: "d1",
+  title: "Booking shows the wrong time",
+  whatHappened: "The slot shows 14:00",
+  whatExpected: "It should show 16:00",
+  reproSteps: "Pick 16:00, confirm",
+  symptom: "Rendered in UTC rather than the venue timezone",
+  suspectedCauses: ["Formatting uses the server timezone"],
+  route: "/book",
+  viewportWidth: 390,
+  viewportHeight: 844,
+  tier: "state",
+  status: "triaged",
+  missingInfo: [],
+  runId: null,
+} as never;
+
+const defectStep = buildDefectStep(baseDefect);
+check("the step is titled after the defect", defectStep.title === "Booking shows the wrong time");
+check("the step carries what was reported", defectStep.instruction.includes("14:00"));
+check("the step carries what was expected", defectStep.instruction.includes("16:00"));
+check(
+  "suspected causes are marked as leads, not findings",
+  defectStep.instruction.includes("leads, not findings"),
+);
+check(
+  "acceptance is phrased against the expected behaviour",
+  defectStep.acceptance[0].includes("It should show 16:00"),
+);
+check(
+  "a state defect must carry a test that fails unchanged",
+  defectStep.acceptance.some((c) => c.includes("fails against the unchanged code")),
+);
+check(
+  "acceptance guards against scope creep",
+  defectStep.acceptance.some((c) => c.includes("No existing behaviour is changed")),
+);
+
+const visualStep = buildDefectStep({ ...(baseDefect as object), tier: "visual" } as never);
+check(
+  "a visual defect is not asked for a failing test",
+  !visualStep.acceptance.some((c) => c.includes("fails against the unchanged code")),
+);
+check(
+  "a visual defect is held to presentation only",
+  visualStep.acceptance.some((c) => c.includes("presentation")),
+);
+check(
+  "a visual defect's criterion names the viewport",
+  visualStep.acceptance.some((c) => c.includes("390px")),
+);
+
+check(
+  "a defect still triaging cannot be worked on",
+  defectBlockedReason({ ...(baseDefect as object), status: "triaging" } as never) !== null,
+);
+check(
+  "a defect whose triage failed cannot be worked on",
+  defectBlockedReason({ ...(baseDefect as object), status: "failed" } as never) !== null,
+);
+check(
+  "a defect needing information is blocked, and says what it needs",
+  (defectBlockedReason({
+    ...(baseDefect as object),
+    status: "needs_info",
+    missingInfo: ["which timezone is the server in?"],
+  } as never) ?? "").includes("which timezone"),
+);
+check(
+  "a defect that already has a run is not activated twice",
+  defectBlockedReason({ ...(baseDefect as object), runId: "run-1" } as never) !== null,
+);
+check("a triaged defect is workable", defectBlockedReason(baseDefect) === null);
+
 console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

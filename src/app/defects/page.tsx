@@ -42,6 +42,7 @@ interface Defect {
   missingInfo: string[] | null;
   status: DefectStatus;
   triageError: string | null;
+  runId: string | null;
   createdAt: string;
   images: DefectImage[];
 }
@@ -514,6 +515,28 @@ function DefectCard({
   onChange: () => Promise<void>;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  // Only a triaged defect with no run yet can be planned. The server checks
+  // this too — the button is hidden so you aren't offered an action that would
+  // just be refused.
+  const canPlan = defect.status === "triaged" && !defect.runId;
+
+  const planFix = async () => {
+    setPlanning(true);
+    setPlanError(null);
+    try {
+      const res = await fetch(`/api/defects/${defect.id}/activate`, { method: "POST" });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not plan a fix");
+      await onChange();
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "Could not plan a fix");
+    } finally {
+      setPlanning(false);
+    }
+  };
 
   const remove = async () => {
     setDeleting(true);
@@ -583,6 +606,34 @@ function DefectCard({
 
       {defect.symptom && (
         <p className="text-sm text-slate-700 mb-2">{defect.symptom}</p>
+      )}
+
+      {canPlan && (
+        <div className="mb-2">
+          <button
+            type="button"
+            onClick={() => void planFix()}
+            disabled={planning}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            {planning ? "Planning…" : "Plan a fix →"}
+          </button>
+          <span className="ml-2 text-[11px] text-slate-500">
+            Creates a run. Nothing is dispatched until you say so.
+          </span>
+        </div>
+      )}
+
+      {planError && (
+        <div className="mb-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs">
+          {planError}
+        </div>
+      )}
+
+      {defect.runId && (
+        <p className="mb-2 text-[11px] text-slate-500">
+          Run <code className="text-[11px]">{defect.runId.slice(0, 8)}</code> created
+        </p>
       )}
 
       {defect.triageError && (
