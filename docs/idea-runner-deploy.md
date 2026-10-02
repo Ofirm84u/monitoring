@@ -92,6 +92,23 @@ pm2 logs monitor --lines 20 --nostream
 Check `SQLITE_PATH` in `.env.production` first and use that path if it differs
 from the default above.
 
+**`GITHUB_TOKEN` must also be in `.env.production`.** `dispatch.ts` reads it to call
+`repository_dispatch`, to resolve the default branch head for the baseline, and to merge or
+close a pull request once you decide. A fine-grained PAT scoped to the target repos with
+**Contents: read and write** plus **Pull requests: read and write** is enough — no `workflow`
+scope, which `repository_dispatch` does not need. Write it without it reaching your shell
+history:
+
+```bash
+read -rs GHTOKEN
+printf '\nGITHUB_TOKEN=%s\n' "$GHTOKEN" | \
+  ssh -i ~/.ssh/gcp_vm ofir@34.165.51.161 'cat >> /home/ofir/monitor/.env.production'
+unset GHTOKEN
+```
+
+Run `read` on its own and paste at the blank line it leaves: pasted as one block, `read`
+swallows the next line of the paste instead of waiting for you.
+
 **`--legacy-peer-deps` is required**, and it is not optional either. `package.json`
 pins `nodemailer@8`, while `next-auth@5.0.0-beta.31` and `@auth/core` declare a
 `peerOptional` dependency on `nodemailer@^7.0.7`. A plain `npm ci` aborts on that
@@ -146,10 +163,37 @@ git stash pop
 
 `ANTHROPIC_API_KEY` is only needed for a real run. A dry run works without it.
 
+### Two repository settings, without which nothing runs
+
+Both were discovered the hard way, and both are needed in **every** target repo. Neither
+produces a readable error: the first fails the run in under a second with no logs and no
+annotation the API will show you, and the second fails after G0 has already passed.
+
+```bash
+gh api -X PUT repos/Ofirm84u/seoapp/actions/permissions/workflow \
+  -F default_workflow_permissions=write \
+  -F can_approve_pull_request_reviews=true
+```
+
+- **`default_workflow_permissions=write`** — the agent job asks for `contents: write` and
+  `pull-requests: write`, and a workflow can never hold more than the repository default.
+  Left at `read`, the job is rejected before it exists: `startup_failure` in 0s.
+- **`can_approve_pull_request_reviews=true`** — misleadingly named. This one boolean governs
+  *creating* pull requests as well as approving them; GitHub does not separate them. Without
+  it the run dies at `gh pr create` with *"GitHub Actions is not permitted to create or
+  approve pull requests"*.
+
+Both widen what every workflow in that repo can do, `deploy.yml` included. The second also
+lets a workflow approve a pull request, which grants nothing while a repo has no branch
+protection but would matter the moment a rule requires one approval. The alternative worth
+building is to have the server open the PR with its own token and leave the runner to push
+and report — then both settings can stay restrictive.
+
 Verify:
 
 ```bash
 gh secret list --repo Ofirm84u/seoapp   # AGENT_SECRET and ANTHROPIC_API_KEY beside the four DEPLOY_*
+gh api repos/Ofirm84u/seoapp/actions/permissions/workflow   # both values as set above
 ```
 
 ---
@@ -243,9 +287,15 @@ card replaces in Phase 4.
 | Packet fetch returns 401 | `AGENT_SECRET` differs between server and repo secret |
 | `workflow was not found` | `@feat/idea-runner` not pushed, or the ref in the caller is wrong |
 | `409 locked` | A step is already running on that repo; it holds the lock until it settles |
+| `startup_failure` in 0s, no logs | A workflow-file issue, usually input types. `client_payload` values arrive as strings, and `dry_run` is declared `boolean` — the caller must wrap it in `fromJSON()` |
 | G0 fails during install | Python version — the runner takes it from the packet, and seoapp needs 3.12 |
 | `ANTHROPIC_API_KEY is not set` | Secret missing, or a caller copied before it forwarded the key |
 | `/defects` returns 500 | The migration in step 3 didn't run |
+| `startup_failure` in 0s, no logs | `default_workflow_permissions` is `read` — see step 4 |
+| `not permitted to create or approve pull requests` | `can_approve_pull_request_reviews` is false — see step 4 |
+| `refusing to allow a GitHub App to create or update workflow` | The branch is cut from a baseline older than a workflow-file change on the default branch. `GITHUB_TOKEN` can never hold that permission; re-dispatch so the baseline is re-resolved |
+| Push rejected as non-fast-forward | A previous attempt left the branch behind. The workflow force-pushes its own `idea/`/`fix/` branch, so this means the workflow itself is stale |
+| A step stays `dispatched` and the repo answers `409 locked` | The workflow never reported — most likely it never started. `POST /api/agent/steps/<id>/abort` frees the repo |
 
 ---
 

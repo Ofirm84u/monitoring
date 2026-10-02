@@ -35,7 +35,14 @@ jobs:
       packet_token: ${{ github.event.client_payload.token }}
       packet_url: ${{ github.event.client_payload.packetUrl }}
       callback_url: ${{ github.event.client_payload.callbackUrl }}
-      dry_run: ${{ github.event.client_payload.dryRun }}
+      # Written to yield a real boolean whether the payload value arrives as a
+      # JSON boolean or as the string "true". The reusable workflow declares
+      # dry_run as a boolean and gates the implementer on `!inputs.dry_run` —
+      # and `!"false"` is `false`, so a string slipping through would make a
+      # real run silently skip the work it was dispatched to do. A type error
+      # here is rejected before any job starts, surfacing as a 0-second
+      # "startup_failure" with no logs, so it is worth being explicit.
+      dry_run: ${{ github.event.client_payload.dryRun == true || github.event.client_payload.dryRun == 'true' }}
     secrets:
       AGENT_SECRET: ${{ secrets.AGENT_SECRET }}
       # Unset is fine for dry runs; the workflow fails with a clear message if a
