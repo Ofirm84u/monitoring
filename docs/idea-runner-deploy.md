@@ -61,8 +61,18 @@ Don't merge to `main` yet — this branch also carries unpushed pm-hub work.
 ssh -i ~/.ssh/gcp_vm ofir@34.165.51.161
 cd /home/ofir/monitor
 
-# Back up the database before migrating. Seven tables are being added.
-cp app.db "app.db.bak-$(date +%F)"
+# Back up the database before migrating. NOT with cp: the database runs in WAL
+# mode, so app.db itself is 4KB of header and the live data sits in app.db-wal.
+# A copied app.db restores an empty database. SQLite's backup API checkpoints
+# the WAL into one consistent file, which is the only copy worth keeping.
+node -e '
+const D = require("better-sqlite3");
+const name = "app.db.backup-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "");
+new D("./app.db").backup(name).then(() => console.log("wrote", name));
+'
+
+# Prove it holds the data before trusting it. A 4KB file is the failure mode.
+ls -la app.db.backup-*
 
 # Write the real value, not a placeholder. Run this from the Mac shell that
 # still holds $AGENT_SECRET, so nothing has to be retyped:
@@ -85,12 +95,27 @@ git pull
 npm ci --legacy-peer-deps
 SQLITE_PATH=/home/ofir/monitor/app.db npx drizzle-kit migrate
 npm run build
-pm2 restart monitor
+pm2 restart monitor --update-env
 pm2 logs monitor --lines 20 --nostream
 ```
 
-Check `SQLITE_PATH` in `.env.production` first and use that path if it differs
-from the default above.
+**`SQLITE_PATH` on that migrate line is not optional, and the reason is nasty.**
+`SQLITE_PATH` is *unset* in `.env.production` — the app falls back to
+`/home/ofir/monitor/app.db` in `src/db/index.ts`, while `drizzle.config.ts` falls
+back to `./.data/app.db`. The two defaults disagree, so a bare `drizzle-kit
+migrate` creates a brand new empty database under `.data/`, migrates that, and
+reports success while the real database is untouched. Nothing warns you. Always
+pass the path, and afterwards check that no `.data/` directory appeared.
+
+Confirm the migration landed where you meant:
+
+```bash
+node -e '
+const db = new (require("better-sqlite3"))("./app.db");
+console.log("tables:", db.prepare("select count(*) c from sqlite_master where type=?").get("table").c);
+console.log(db.prepare("select name from pragma_table_info(?)").all("agent_checks").map(r => r.name).join(", "));
+'
+```
 
 **`GITHUB_TOKEN` must also be in `.env.production`.** `dispatch.ts` reads it to call
 `repository_dispatch`, to resolve the default branch head for the baseline, and to merge or
