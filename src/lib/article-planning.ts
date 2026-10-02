@@ -2,6 +2,8 @@ import type { Article } from "@/lib/articles";
 import { updateArticle } from "@/lib/articles";
 import type { ProjectConfig } from "@/lib/projects";
 import { planArticleImplementation, planArticleQA } from "@/lib/claude";
+import { DENIED_PATHS } from "@/lib/agent-packet";
+import { fetchDependencyManifests } from "@/lib/repo-manifests";
 import { createSteps, setRunPlans, setRunStatus } from "@/lib/runs";
 import { buildSteps } from "@/lib/plan-parse";
 
@@ -36,8 +38,15 @@ export async function fillArticlePlans({
   codeContext,
 }: FillArticlePlansInput): Promise<void> {
   try {
+    // Best-effort: a missing token or an unreachable GitHub costs the planner its
+    // dependency list, not the plan. What it must never do is guess at the list.
+    const manifests = project.repo ? await fetchDependencyManifests(project.repo) : [];
+
     const [implPlan, qaPlan] = await Promise.all([
-      planArticleImplementation(project, article, codeContext),
+      planArticleImplementation(project, article, codeContext, {
+        deniedPaths: DENIED_PATHS,
+        manifests,
+      }),
       planArticleQA(project, article),
     ]);
 

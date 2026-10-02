@@ -1012,6 +1012,53 @@ check(
 );
 check("a triaged defect is workable", defectBlockedReason(baseDefect) === null);
 
+console.log("\n— the planner is told what it may require —");
+{
+  const { buildPlanConstraintsBlock } = await import("../src/lib/plan-constraints.ts");
+
+  const withManifests = buildPlanConstraintsBlock({
+    deniedPaths: ["requirements.txt", "alembic/**"],
+    manifests: [{ path: "requirements.txt", text: "httpx==0.28.1\nfastapi==0.115.0" }],
+  });
+  check(
+    "the planner sees the actual dependency list",
+    withManifests.includes("httpx==0.28.1"),
+  );
+  check(
+    "and is told adding one is not possible",
+    withManifests.includes("adding one is not possible"),
+  );
+  check(
+    "the denied paths are named, not summarised",
+    withManifests.includes("alembic/**") && withManifests.includes("requirements.txt"),
+  );
+  check(
+    "a table needing a migration must be called out in the step",
+    withManifests.includes("needs a migration, which is a denied path"),
+  );
+  check(
+    "placeholders in proposed code are refused by name",
+    withManifests.includes("yourdomain"),
+  );
+  check(
+    "the diff budget reaches the planner too",
+    withManifests.includes("8 files") && withManifests.includes("400 changed lines"),
+  );
+
+  const noManifests = buildPlanConstraintsBlock({
+    deniedPaths: ["requirements.txt"],
+    manifests: [],
+  });
+  check(
+    "an unreadable manifest is stated as unknown, not treated as empty",
+    noManifests.includes("could not be read"),
+  );
+  check(
+    "no constraints means no block, so other callers are unchanged",
+    buildPlanConstraintsBlock() === "",
+  );
+}
+
 console.log("\n— checks are attributed to an attempt —");
 {
   const [attemptRun] = db

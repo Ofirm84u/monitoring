@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PROJECTS, type ProjectConfig } from "./projects";
+import { buildPlanConstraintsBlock } from "./plan-constraints";
+import type { RepoManifest } from "./repo-manifests";
 import type { Article, ArticleSuggestion, ArticleSummary } from "./articles";
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
@@ -150,10 +152,22 @@ export async function planArticleImplementation(
   project: ProjectConfig,
   article: Article,
   codeContext?: string | null,
+  /**
+   * What the agent that executes this plan is actually allowed to do.
+   *
+   * Without it the planner proposed `import anthropic` for a package that is not
+   * a dependency, and a database table whose migration would have to live under a
+   * denied path. Both were caught — by the implementer, after a dispatch and a
+   * runner had been spent finding out. The planner was not being careless; it had
+   * no way to know either fact.
+   */
+  constraints?: { deniedPaths: readonly string[]; manifests: RepoManifest[] },
 ): Promise<ArticlePlan> {
   const codeBlock = codeContext
     ? `\nPROJECT CODE (excerpt — cite exact functions/lines if present, never invent):\n${codeContext}\n`
     : "";
+
+  const constraintBlock = buildPlanConstraintsBlock(constraints);
 
   const keyIdeas = article.summary?.keyIdeas.map((k) => `  - ${k}`).join("\n") ?? "";
   const gapBlock = article.gapAnalysis?.text
@@ -166,8 +180,7 @@ export async function planArticleImplementation(
 
 PROJECT: ${project.name}
 STACK: ${project.stack.join(", ")}
-DESCRIPTION: ${project.description}${codeBlock}
-
+DESCRIPTION: ${project.description}${codeBlock}${constraintBlock}
 RULES:
 - Respond in HEBREW. Use English for code identifiers, keywords, and file paths.
 - COMPLETE every section. Do not summarise or skip.
