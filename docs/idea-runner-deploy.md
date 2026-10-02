@@ -67,7 +67,7 @@ EOF
 git fetch origin
 git checkout feat/idea-runner
 git pull
-npm ci
+npm ci --legacy-peer-deps
 SQLITE_PATH=/home/ofir/monitor/app.db npx drizzle-kit migrate
 npm run build
 pm2 restart monitor
@@ -76,6 +76,18 @@ pm2 logs monitor --lines 20 --nostream
 
 Check `SQLITE_PATH` in `.env.production` first and use that path if it differs
 from the default above.
+
+**`--legacy-peer-deps` is required**, and it is not optional either. `package.json`
+pins `nodemailer@8`, while `next-auth@5.0.0-beta.31` and `@auth/core` declare a
+`peerOptional` dependency on `nodemailer@^7.0.7`. A plain `npm ci` aborts on that
+conflict, leaving `next-auth` and `drizzle-orm` uninstalled — and the next
+`npm run build` then fails with a wall of "Module not found" that looks like a
+code problem and isn't. The peer exists for Auth.js's Email provider, which this
+app does not use; it signs in with Google, and `src/lib/email.ts` drives
+nodemailer directly.
+
+It only ever shows up on a clean install, which is what a server does and a
+laptop with a warm `node_modules` never does.
 
 **The migration is not optional.** Without it `/defects` returns 500 on first
 load.
