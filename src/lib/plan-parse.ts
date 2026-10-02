@@ -13,12 +13,31 @@ import type { StepInput } from "@/lib/runs";
  * template should yield fewer steps, never throw.
  */
 
-/** `### שלב 1 — כותרת` / `### Step 2 - title`, and anything else at H3. */
-const STEP_HEADING = /^###\s+(.+?)\s*$/;
+/** Any markdown heading, at any level. */
+const HEADING = /^(#{1,6})\s+(.+?)\s*$/;
+/**
+ * A numbered step: `### שלב 1 — כותרת`, `## Step 2 - title`.
+ *
+ * Matched positively, which is the whole point. Identifying steps by excluding
+ * structural headings cost a real step in production: the plan's first step was
+ * titled "שלב 1 — GEO-First Prompt Structure + Original Data Injection", the
+ * word "Prompt" collided with the "פרומפט ל-Claude Code" section's exclusion
+ * term, and the step was silently dropped — a run that would have built half of
+ * what the plan asked for, with nothing anywhere saying so.
+ */
+const NUMBERED_STEP = /^(?:שלב|step)\s*\d+\b/i;
 /** A markdown task-list item, checked or not. */
 const CHECKLIST_ITEM = /^\s*[-*]\s+\[[ xX]\]\s+(.+?)\s*$/;
-/** Headings whose H3 sections are structure, not work to be done. */
-const NON_STEP_HEADINGS = [
+/** An opening or closing code fence. */
+const FENCE = /^\s*(?:```|~~~)/;
+/**
+ * Sections that are structure rather than work, used only when a plan carries
+ * no numbered steps at all.
+ *
+ * Anchored to the start of the heading: a section *called* "סטטוס" is structure,
+ * while a step that merely mentions status in its title is work.
+ */
+const NON_STEP_PREFIXES = [
   "סטטוס",
   "טבלת",
   "פרומפט",
@@ -30,9 +49,36 @@ const NON_STEP_HEADINGS = [
 const MAX_STEPS = 6;
 const MAX_ACCEPTANCE = 12;
 
-function isStepHeading(heading: string): boolean {
+function isStructuralHeading(heading: string): boolean {
   const lower = heading.toLowerCase();
-  return !NON_STEP_HEADINGS.some((skip) => lower.includes(skip.toLowerCase()));
+  return NON_STEP_PREFIXES.some((prefix) => lower.startsWith(prefix.toLowerCase()));
+}
+
+interface PlanLine {
+  /** Heading text, or null for body content — including headings inside fences. */
+  heading: string | null;
+  text: string;
+}
+
+/**
+ * Classify each line, respecting code fences.
+ *
+ * Plans embed code blocks whose first line is often a path comment such as
+ * `# app/services/content_builder.py`. That is a markdown heading by shape and
+ * part of the step's code by intent, so a parser that reads it as a heading
+ * truncates the instruction right where the useful detail starts.
+ */
+function classify(planText: string): PlanLine[] {
+  let inFence = false;
+  return planText.split("\n").map((text) => {
+    if (FENCE.test(text)) {
+      inFence = !inFence;
+      return { heading: null, text };
+    }
+    if (inFence) return { heading: null, text };
+    const match = text.match(HEADING);
+    return { heading: match ? match[2].trim() : null, text };
+  });
 }
 
 /**
@@ -43,8 +89,17 @@ function isStepHeading(heading: string): boolean {
  * summarising here would throw away the detail the plan exists to carry.
  */
 export function parsePlanSteps(planText: string): Array<Omit<StepInput, "acceptance">> {
-  const lines = planText.split("\n");
+  const lines = classify(planText);
   const steps: Array<Omit<StepInput, "acceptance">> = [];
+
+  // When the plan numbers its steps — the template's normal output — those
+  // headings and only those start a step. Exclusion is the fallback for a plan
+  // that drifted, where a structural heading is the best signal available.
+  const hasNumberedSteps = lines.some(
+    (line) => line.heading !== null && NUMBERED_STEP.test(line.heading),
+  );
+  const startsAStep = (heading: string) =>
+    hasNumberedSteps ? NUMBERED_STEP.test(heading) : !isStructuralHeading(heading);
 
   let currentTitle: string | null = null;
   let currentBody: string[] = [];
@@ -60,14 +115,14 @@ export function parsePlanSteps(planText: string): Array<Omit<StepInput, "accepta
   };
 
   for (const line of lines) {
-    const match = line.match(STEP_HEADING);
-    if (match) {
+    if (line.heading !== null) {
+      // Any heading ends the previous step: a step's body stops where the next
+      // section begins, whether or not that section is itself work.
       flush();
-      const heading = match[1].trim();
-      if (isStepHeading(heading)) currentTitle = heading.slice(0, 120);
+      if (startsAStep(line.heading)) currentTitle = line.heading.slice(0, 120);
       continue;
     }
-    if (currentTitle !== null) currentBody.push(line);
+    if (currentTitle !== null) currentBody.push(line.text);
   }
   flush();
 

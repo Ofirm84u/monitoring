@@ -164,6 +164,57 @@ check(
   !steps.some((s) => s.title.includes("סטטוס")),
 );
 
+// The plan that exposed this in production: a step titled "...Prompt Structure..."
+// was dropped because "prompt" also names a structural section. Steps are now
+// identified by their number, so a step may mention anything it likes.
+const COLLIDING_PLAN = `## שלבי יישום
+### שלב 1 — GEO-First Prompt Structure + Original Data Injection
+build the prompt structure
+\`\`\`python
+# app/services/content_builder.py
+### this heading lives inside a fence
+\`\`\`
+### שלב 2 — Citation Monitoring
+monitor the citations
+## טבלת עדיפויות
+| a | b |
+## פרומפט ל-Claude Code
+paste this
+## סטטוס תכנית
+pending`;
+
+const colliding = parsePlanSteps(COLLIDING_PLAN);
+check(
+  "a step whose title contains a structural term is still a step",
+  colliding.length === 2 && colliding[0]!.title.includes("Prompt Structure"),
+);
+check(
+  "a heading inside a code fence stays part of the instruction",
+  colliding[0]!.instruction.includes("### this heading lives inside a fence"),
+);
+check(
+  "a step's body stops at the next section",
+  !colliding.some((s) => /טבלת|פרומפט ל-Claude|סטטוס תכנית/.test(s.instruction)),
+);
+check(
+  "the structural sections are still excluded when steps are numbered",
+  !colliding.some((s) => /^(טבלת|פרומפט|סטטוס)/.test(s.title)),
+);
+
+// A plan that drifts from the template carries no numbered steps, so exclusion
+// is all there is to go on — and must still work.
+const DRIFTED_PLAN = `## Overview
+context
+## Make the change
+the actual work
+## Status
+pending`;
+const drifted = parsePlanSteps(DRIFTED_PLAN);
+check(
+  "a plan without numbered steps falls back to excluding structure",
+  drifted.length === 2 && drifted.every((s) => !/^status/i.test(s.title)),
+);
+
 const criteria = parseAcceptanceCriteria(SAMPLE_QA);
 check("checklist items become acceptance criteria", criteria.length === 4);
 check(
