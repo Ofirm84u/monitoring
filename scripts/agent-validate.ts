@@ -646,6 +646,53 @@ check(
   evaluateReproduction("G5-A", false, true).summary.includes("never reproduced"),
 );
 
+// The diff that actually got through on the first real run: the workflow's own
+// gate logs, nothing else. Inside the budget, on no denylist, and not a change.
+check(
+  "a diff made only of run output fails G2",
+  evaluateDiffBudget({
+    changedFiles: ["g0.log", "implementer.log"],
+    additions: 118,
+    deletions: 0,
+  }).status === "fail",
+);
+check(
+  "and it says so in terms a reviewer can act on",
+  evaluateDiffBudget({
+    changedFiles: ["g0.log", "implementer.log"],
+    additions: 118,
+    deletions: 0,
+  }).summary.includes("No authored change"),
+);
+check(
+  "one real file alongside the logs is a change",
+  evaluateDiffBudget({
+    changedFiles: ["g0.log", "apps/api/citation_monitor.py"],
+    additions: 170,
+    deletions: 0,
+  }).status === "pass",
+);
+check(
+  "build output counts as run output too",
+  evaluateDiffBudget({
+    changedFiles: [".next/server/app/page.js", "coverage/lcov.info", "dist/main.js.map"],
+    additions: 400,
+    deletions: 0,
+  }).status === "fail",
+);
+check(
+  "an empty diff is not reported as an artifact problem",
+  evaluateDiffBudget({ changedFiles: [], additions: 0, deletions: 0 }).status === "pass",
+);
+check(
+  "a denied path still outranks the budget",
+  evaluateDiffBudget({
+    changedFiles: ["package.json", "src/a.ts"],
+    additions: 2,
+    deletions: 0,
+  }).summary.includes("denied path"),
+);
+
 // A full ladder is G0, G1, G2 and G3. Reproduction gates are required only when
 // the run has one, which the caller supplies.
 const FULL = [

@@ -781,8 +781,18 @@ export async function reviewAcceptance(input: {
   stepTitle: string;
   criteria: string[];
   diff: string;
+  /**
+   * Which step of the plan this is. The criteria are the QA plan's for the whole
+   * plan, not for one step — nothing in the plan records which criterion belongs
+   * where — so a reviewer told only "judge these ten" marks the ones describing
+   * later steps as not met, and the headline count stops meaning anything. On the
+   * first real run that produced "0 of 10" for a change that had done its own
+   * step correctly.
+   */
+  stepIndex: number;
+  stepCount: number;
 }): Promise<AcceptanceReview> {
-  const { project, stepTitle, criteria, diff } = input;
+  const { project, stepTitle, criteria, diff, stepIndex, stepCount } = input;
 
   if (criteria.length === 0) {
     throw new Error("No acceptance criteria to review against");
@@ -808,7 +818,9 @@ Return ONLY a valid JSON object — no markdown fences, no commentary. Schema:
 RULES:
 - Return one entry for EVERY criterion given, in the order given, identified by its number. Do not merge or split them, and do not echo the criterion text back — the number is enough.
 - "met" requires evidence visible in the diff. A change that looks like it was probably done is "unclear", not "met".
-- "not_met" means the diff contradicts the criterion or plainly omits it.
+- "not_met" means the diff contradicts the criterion, or omits something this step was supposed to contain.
+- The criteria cover the WHOLE plan, not only this step. A criterion describing work that belongs to a different step is "unclear" — say which step you think it belongs to. Do not mark it "not_met": this change was never meant to satisfy it.
+- A criterion written as a manual procedure ("run X and verify Y") cannot be settled by reading a diff. Judge whether the code the procedure would exercise is present and plausible, and answer "unclear" when that is as far as the diff takes you.
 - "unclear" means the diff neither shows nor contradicts it — for example a runtime behaviour no static reading can settle. Prefer "unclear" over an optimistic "met"; a wrong "met" is the one mistake here that actually costs something.
 - Evidence must point at the change. Do not restate the criterion back as its own evidence.
 - "concerns" is for problems you noticed that no criterion covers: regressions, unhandled errors, security issues, secrets, debug code left behind. Leave it empty if there are none. Do not use it for style preferences.
@@ -816,6 +828,7 @@ RULES:
 
   const criteriaBlock = criteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
   const userMessage = `CHANGE UNDER REVIEW: ${stepTitle}
+THIS IS STEP ${stepIndex} OF ${stepCount} in the plan. Later steps are not in this diff and were never meant to be.
 
 ACCEPTANCE CRITERIA:
 ${criteriaBlock}

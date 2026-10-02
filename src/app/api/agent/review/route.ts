@@ -5,7 +5,7 @@ import {
   AGENT_TIMESTAMP_HEADER,
   verifySignature,
 } from "@/lib/agent-auth";
-import { getRun, getStep, listChecks, recordCheck } from "@/lib/runs";
+import { getRun, getStep, listChecks, listSteps, recordCheck } from "@/lib/runs";
 import { evaluateDiffBudget, evaluateSmoke, isReadyForDecision } from "@/lib/gates";
 import { requiredReproductionGate } from "@/lib/reproduction";
 import { reviewAcceptance } from "@/lib/claude";
@@ -138,6 +138,8 @@ export async function POST(request: Request) {
         stepTitle: step.title,
         criteria,
         diff: typeof body.diff === "string" ? body.diff : "",
+        stepIndex: step.idx + 1,
+        stepCount: (await listSteps(run.id)).length,
       });
       const unmet = review.verdicts.filter((v) => v.verdict !== "met");
       await recordCheck({

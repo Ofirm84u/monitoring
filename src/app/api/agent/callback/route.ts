@@ -220,7 +220,11 @@ export async function POST(request: Request) {
       const decision = await createDecision({
         stepId: step.id,
         kind: "approve",
-        prompt: `${step.title} — PR #${step.prNumber ?? body.prNumber ?? "?"}`,
+        prompt: decisionPrompt(
+          step.title,
+          step.prNumber ?? (typeof body.prNumber === "number" ? body.prNumber : null),
+          await listChecks(step.id),
+        ),
       });
       return json(200, { ok: true, decisionId: decision.id });
     }
@@ -250,4 +254,64 @@ export async function POST(request: Request) {
       return json(200, { ok: true });
     }
   }
+}
+
+
+/**
+ * What a person sees when asked to approve a merge.
+ *
+ * The acceptance review's concerns were the sharpest read anyone had of the first
+ * real change — it was the only gate to notice that a pull request contained no
+ * code — and they were buried in a JSON evidence blob reachable only through the
+ * API. This design puts its safety in an informed human decision, so withholding
+ * the best signal available from exactly that decision was the real defect.
+ *
+ * Gate summaries come first, because a reviewer needs to know what was *not*
+ * checked as much as what passed: a skipped G3 means nothing verified that the
+ * application still starts.
+ */
+function decisionPrompt(
+  title: string,
+  prNumber: number | null,
+  checks: Array<{ gate: Gate; status: CheckStatus; summary: string; evidence?: unknown }>,
+): string {
+  const lines = [`${title} — PR #${prNumber ?? "?"}`];
+
+  // Latest verdict per gate, in the order the ladder runs them.
+  const latest = new Map<Gate, { status: CheckStatus; summary: string; evidence?: unknown }>();
+  for (const check of checks) latest.set(check.gate, check);
+
+  const gateLines = [...latest.entries()]
+    .filter(([, c]) => c.status !== "pass")
+    .map(([gate, c]) => `${gate} ${c.status}: ${c.summary}`);
+
+  if (gateLines.length === 0) {
+    lines.push("", "All gates passed.");
+  } else {
+    lines.push("", "Not a clean pass:", ...gateLines.map((l) => `- ${l}`));
+  }
+
+  const review = latest.get("G4")?.evidence as
+    | { verdicts?: Array<{ criterion: string; verdict: string }>; concerns?: string[] }
+    | undefined;
+
+  const unmet = (review?.verdicts ?? []).filter((v) => v.verdict === "not_met");
+  if (unmet.length > 0) {
+    lines.push(
+      "",
+      `Criteria the review found unmet (${unmet.length}):`,
+      ...unmet.slice(0, 5).map((v) => `- ${v.criterion}`),
+    );
+  }
+
+  const concerns = review?.concerns ?? [];
+  if (concerns.length > 0) {
+    lines.push(
+      "",
+      "Concerns raised that no criterion covers:",
+      ...concerns.slice(0, 5).map((c) => `- ${c}`),
+    );
+  }
+
+  return lines.join("\n").slice(0, 4_000);
 }

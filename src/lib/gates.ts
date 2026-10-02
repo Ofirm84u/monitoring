@@ -67,12 +67,35 @@ export interface DiffSummary {
 }
 
 /**
+ * Paths that are produced by running the pipeline rather than authored by it.
+ *
+ * Kept separate from DENIED_PATHS: touching a denied path is a scope violation,
+ * whereas these are simply not evidence that anything was implemented.
+ */
+const ARTIFACT_PATTERNS = [
+  "**/*.log",
+  "**/*.map",
+  ".next/**",
+  "dist/**",
+  "build/**",
+  "coverage/**",
+  "**/__pycache__/**",
+  ".pytest_cache/**",
+  "**/.DS_Store",
+] as const;
+
+function isArtifact(path: string): boolean {
+  return ARTIFACT_PATTERNS.some((pattern) => matchesGlob(path, pattern));
+}
+
+/**
  * G2 — scope control.
  *
- * Two independent reasons to stop. A denied path is a hard refusal: the change
- * would alter what the other gates even mean. An oversized diff is not wrong in
- * itself, but a step that grew this far is no longer the step that was planned,
- * so it stops for a human rather than passing on its own.
+ * Three independent reasons to stop. A diff made only of build or run output is
+ * not a change set at all, whatever its size. A denied path is a hard refusal:
+ * the change would alter what the other gates even mean. And an oversized diff
+ * is not wrong in itself, but a step that grew this far is no longer the step
+ * that was planned, so it stops for a human rather than passing on its own.
  */
 export function evaluateDiffBudget(diff: DiffSummary): GateVerdict {
   const violations = diff.changedFiles
@@ -90,6 +113,24 @@ export function evaluateDiffBudget(diff: DiffSummary): GateVerdict {
     budget: DIFF_BUDGET,
     violations,
   };
+
+  // Scope is not substance. The first real run opened a pull request whose only
+  // two files were the workflow's own gate logs, and this gate passed it — the
+  // logs were inside the budget and on no denylist. Every mechanical gate agreed,
+  // and only the advisory review noticed that nothing had been implemented. A
+  // diff made entirely of artifacts is not a change set, so it stops here, where
+  // the answer is deterministic, instead of resting on a gate that cannot block.
+  const authored = diff.changedFiles.filter((file) => !isArtifact(file));
+  if (diff.changedFiles.length > 0 && authored.length === 0) {
+    return {
+      gate: "G2",
+      status: "fail",
+      summary: `No authored change: all ${diff.changedFiles.length} changed file${
+        diff.changedFiles.length > 1 ? "s are" : " is"
+      } build or run output (${diff.changedFiles.join(", ")})`,
+      evidence,
+    };
+  }
 
   if (violations.length > 0) {
     // Naming the pattern explains *why* a file is refused, but repeating it
