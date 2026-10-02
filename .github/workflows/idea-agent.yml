@@ -120,9 +120,9 @@ jobs:
             evidence="$(tail -c 4000 "${log}" | jq -Rs '{tail: .}')"
           fi
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
-            --arg stepId "${STEP_ID}" --arg g "${gate}" \
+            --arg stepId "${STEP_ID}" --arg g "${gate}" --argjson at "${ATTEMPT}" \
             --arg st "${status}" --arg sm "${summary}" --argjson ev "${evidence}" \
-            '{stepId:$stepId, event:"gate", gate:{gate:$g, status:$st, summary:$sm, evidence:$ev}}')"
+            '{stepId:$stepId, attempt:$at, event:"gate", gate:{gate:$g, status:$st, summary:$sm, evidence:$ev}}')"
           SCRIPT
           chmod +x "${RUNNER_TEMP}/report-gate.sh"
 
@@ -153,6 +153,12 @@ jobs:
             echo "review_url=$(jq -r '.packet.reviewUrl' packet.json)"
             echo "repro_gate=$(jq -r '.packet.reproductionGate // ""' packet.json)"
           } >> "$GITHUB_OUTPUT"
+          # Every callback carries the attempt it belongs to, so the server can
+          # refuse a verdict from a runner whose attempt has since been retired —
+          # by an answer or an abort. Written to the environment rather than an
+          # output because report-gate.sh is composed before this step runs and
+          # reads it at call time.
+          echo "ATTEMPT=$(jq -r '.packet.attempt' packet.json)" >> "$GITHUB_ENV"
           # Multi-line, so it goes to a file rather than through an output.
           jq -r '.packet.implementerPrompt' packet.json > "${RUNNER_TEMP}/prompt.md"
 
@@ -263,8 +269,8 @@ jobs:
             echo "parked=true" >> "$GITHUB_OUTPUT"
             question="$(tail -c 4000 "${RUNNER_TEMP}/implementer.log")"
             "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
-              --arg stepId "${STEP_ID}" --arg question "${question}" \
-              '{stepId:$stepId, event:"question", question:$question}')" || true
+              --arg stepId "${STEP_ID}" --argjson at "${ATTEMPT}" --arg question "${question}" \
+              '{stepId:$stepId, attempt:$at, event:"question", question:$question}')" || true
             echo "::error::The implementer produced no change and asked a question instead. The run is parked for an answer; nothing was pushed."
             exit 1
           fi
@@ -325,11 +331,11 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
-            --arg stepId "${STEP_ID}" \
+            --arg stepId "${STEP_ID}" --argjson at "${ATTEMPT}" \
             --arg branch '${{ steps.packet.outputs.branch }}' \
             --arg headSha '${{ steps.pr.outputs.head_sha }}' \
             --argjson prNumber '${{ steps.pr.outputs.number }}' \
-            '{stepId:$stepId, event:"implemented", branch:$branch, prNumber:$prNumber, headSha:$headSha}')"
+            '{stepId:$stepId, attempt:$at, event:"implemented", branch:$branch, prNumber:$prNumber, headSha:$headSha}')"
 
       - name: G1 — the same command on the branch
         id: g1
@@ -359,9 +365,9 @@ jobs:
           # Observations only — evaluateSmoke on the server decides the verdict,
           # including the case where the app was already down at the baseline.
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
-            --arg stepId "${STEP_ID}" --arg cmd "${SMOKE_LABEL}" \
+            --arg stepId "${STEP_ID}" --argjson at "${ATTEMPT}" --arg cmd "${SMOKE_LABEL}" \
             --argjson baselineOk "${BASELINE_OK:-null}" --argjson headOk "${head_ok}" \
-            '{stepId:$stepId, event:"gate", gate:{gate:"G3", smoke:{smokeCmd:$cmd, baselineOk:$baselineOk, headOk:$headOk}}}')"
+            '{stepId:$stepId, attempt:$at, event:"gate", gate:{gate:"G3", smoke:{smokeCmd:$cmd, baselineOk:$baselineOk, headOk:$headOk}}}')"
 
       - name: G5 — the test must fail at the baseline
         if: ${{ !inputs.dry_run && (steps.packet.outputs.repro_gate == 'G5-A' || steps.packet.outputs.repro_gate == 'G5-B') }}
@@ -396,10 +402,10 @@ jobs:
           git switch "${{ steps.packet.outputs.branch }}"
 
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
-            --arg stepId "${STEP_ID}" --arg g "${REPRO_GATE}" \
+            --arg stepId "${STEP_ID}" --argjson at "${ATTEMPT}" --arg g "${REPRO_GATE}" \
             --argjson failedAtBase "${failed_at_base}" \
             --argjson passedAtHead "${PASSED_AT_HEAD}" \
-            '{stepId:$stepId, event:"gate", gate:{gate:$g, reproduction:{failedAtBase:$failedAtBase, passedAtHead:$passedAtHead}}}')"
+            '{stepId:$stepId, attempt:$at, event:"gate", gate:{gate:$g, reproduction:{failedAtBase:$failedAtBase, passedAtHead:$passedAtHead}}}')"
 
           if [[ "${failed_at_base}" != "true" ]]; then
             echo "::error::The test passes at the baseline too, so it never reproduced the bug"
@@ -438,7 +444,8 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc --arg stepId "${STEP_ID}" \
-            '{stepId:$stepId, event:"ready"}')"
+            --argjson at "${ATTEMPT}" \
+            '{stepId:$stepId, attempt:$at, event:"ready"}')"
 
       - name: Report failure
         # Not when the implementer parked the run with a question. The job is red
@@ -451,5 +458,5 @@ jobs:
           # Best effort: the run already failed, and a failing callback here
           # would only bury the original error.
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc --arg stepId "${STEP_ID}" \
-            --arg err "Workflow run ${GITHUB_RUN_ID} failed — see the Actions log" \
-            '{stepId:$stepId, event:"failed", error:$err}')" || true
+            --argjson at "${ATTEMPT:-0}" --arg err "Workflow run ${GITHUB_RUN_ID} failed — see the Actions log" \
+            '{stepId:$stepId, attempt:$at, event:"failed", error:$err}')" || true

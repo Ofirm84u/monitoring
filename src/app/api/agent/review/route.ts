@@ -85,11 +85,12 @@ export async function POST(request: Request) {
   // to read as a pass. Record the verdict the contract already implies: a skip
   // that names the gap, which a reviewer can weigh. If a smoke command *is*
   // declared and still nothing arrived, evaluateSmoke says so and blocks.
-  const existing = await listChecks(step.id);
+  const existing = await listChecks(step.id, step.attempt);
   if (!existing.some((check) => check.gate === "G3")) {
     const smoke = evaluateSmoke(project.verify?.smokeCmd ?? null, null, null);
     await recordCheck({
       stepId: step.id,
+      attempt: step.attempt,
       gate: smoke.gate,
       status: smoke.status,
       summary: smoke.summary,
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
   }
 
   const reproduction = await requiredReproductionGate(run, project);
-  const readiness = async () => isReadyForDecision(await listChecks(step.id), reproduction);
+  const readiness = async () => isReadyForDecision(await listChecks(step.id, step.attempt), reproduction);
 
   // G2 first. A diff that already broke scope should not also cost a model call,
   // and its verdict would be meaningless anyway — the change under review is not
@@ -110,6 +111,7 @@ export async function POST(request: Request) {
   });
   await recordCheck({
     stepId: step.id,
+    attempt: step.attempt,
     gate: scope.gate,
     status: scope.status,
     summary: scope.summary,
@@ -126,6 +128,7 @@ export async function POST(request: Request) {
   if (criteria.length === 0) {
     await recordCheck({
       stepId: step.id,
+      attempt: step.attempt,
       gate: "G4",
       status: "skip",
       summary: "No acceptance criteria were parsed from the QA plan",
@@ -144,6 +147,7 @@ export async function POST(request: Request) {
       const unmet = review.verdicts.filter((v) => v.verdict !== "met");
       await recordCheck({
         stepId: step.id,
+        attempt: step.attempt,
         gate: "G4",
         status: "advisory",
         summary:
@@ -158,6 +162,7 @@ export async function POST(request: Request) {
       // review as a pass would quietly remove the gate.
       await recordCheck({
         stepId: step.id,
+        attempt: step.attempt,
         gate: "G4",
         status: "skip",
         summary: `Acceptance review did not run: ${err instanceof Error ? err.message : "unknown error"}`,

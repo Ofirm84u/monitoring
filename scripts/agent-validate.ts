@@ -703,6 +703,9 @@ const FULL = [
 ] as const;
 
 check("a complete, passing ladder is ready", isReadyForDecision([...FULL]).ready);
+// Readiness is now computed over one attempt's checks, which is the caller's job
+// to select — these gate-level checks therefore assume an already-filtered list.
+// The attempt filtering itself is exercised against the database below.
 check(
   "a blocking gate that never reported is NOT ready",
   !isReadyForDecision([
@@ -1008,6 +1011,57 @@ check(
   defectBlockedReason({ ...(baseDefect as object), runId: "run-1" } as never) !== null,
 );
 check("a triaged defect is workable", defectBlockedReason(baseDefect) === null);
+
+console.log("\n— checks are attributed to an attempt —");
+{
+  const [attemptRun] = db
+    .insert(agentRuns)
+    .values({ source: "article", sourceId: "validate-attempt", projectId: PROJECT, baseSha: "abc" })
+    .returning()
+    .all();
+  const [attemptStep] = db
+    .insert(agentSteps)
+    .values({ runId: attemptRun.id, idx: 0, title: "t", instruction: "i", attempt: 1 })
+    .returning()
+    .all();
+
+  // Attempt 0 passed G1. Attempt 1 has not reported it.
+  db.insert(schema.agentChecks)
+    .values([
+      { stepId: attemptStep.id, attempt: 0, gate: "G1", status: "pass", summary: "pass on the old code" },
+      { stepId: attemptStep.id, attempt: 1, gate: "G0", status: "pass", summary: "this attempt" },
+    ])
+    .run();
+
+  const all = db
+    .select()
+    .from(schema.agentChecks)
+    .where(eq(schema.agentChecks.stepId, attemptStep.id))
+    .all();
+  check("the whole history stays readable", all.length === 2);
+
+  const current = all
+    .filter((c) => c.attempt === attemptStep.attempt)
+    .map((c) => ({ gate: c.gate, status: c.status }));
+  check(
+    "an earlier attempt's pass is not among this attempt's checks",
+    current.length === 1 && current[0]!.gate === "G0",
+  );
+  check(
+    "so a gate that has not reported this attempt leaves it unready",
+    !isReadyForDecision(current).ready,
+  );
+  check(
+    "and the stale row would have satisfied it, which is the bug",
+    isReadyForDecision([
+      ...all.map((c) => ({ gate: c.gate, status: c.status })),
+      { gate: "G2", status: "pass" },
+      { gate: "G3", status: "skip" },
+    ]).ready,
+  );
+
+  db.delete(agentRuns).where(eq(agentRuns.id, attemptRun.id)).run();
+}
 
 console.log(`\n${failures === 0 ? "ALL PASS ✅" : failures + " FAILED ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

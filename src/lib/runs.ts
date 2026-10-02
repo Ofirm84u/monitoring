@@ -227,6 +227,12 @@ export async function getProjectLock(projectId: string) {
 
 export interface RecordCheckInput {
   stepId: string;
+  /**
+   * The attempt this verdict belongs to. Required rather than defaulted: a check
+   * silently filed under attempt 0 would be read as evidence about code from a
+   * different attempt, which is the failure this column exists to prevent.
+   */
+  attempt: number;
   gate: Gate;
   status: CheckStatus;
   summary: string;
@@ -234,24 +240,32 @@ export interface RecordCheckInput {
   durationMs?: number;
 }
 
-/** Gate results are append-only; re-running a gate adds a row, latest wins. */
 export async function recordCheck(input: RecordCheckInput): Promise<AgentCheck> {
   const [check] = await db
     .insert(agentChecks)
     .values({
       stepId: input.stepId,
+      attempt: input.attempt,
       gate: input.gate,
       status: input.status,
       summary: input.summary,
       evidence: input.evidence ?? null,
-      durationMs: input.durationMs ?? null,
+      durationMs: input.durationMs,
     })
     .returning();
   return check;
 }
 
-export async function listChecks(stepId: string): Promise<AgentCheck[]> {
-  return db.select().from(agentChecks).where(eq(agentChecks.stepId, stepId));
+export async function listChecks(
+  stepId: string,
+  /** Omit for the whole history; pass an attempt to judge that attempt alone. */
+  attempt?: number,
+): Promise<AgentCheck[]> {
+  const where =
+    attempt === undefined
+      ? eq(agentChecks.stepId, stepId)
+      : and(eq(agentChecks.stepId, stepId), eq(agentChecks.attempt, attempt));
+  return db.select().from(agentChecks).where(where).orderBy(agentChecks.createdAt);
 }
 
 const DECISION_TTL_MS = 24 * 60 * 60 * 1000;

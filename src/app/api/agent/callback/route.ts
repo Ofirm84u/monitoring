@@ -55,6 +55,8 @@ function json(status: number, body: unknown) {
 
 interface CallbackBody {
   stepId?: string;
+  /** Which attempt the runner was dispatched for; see the check below. */
+  attempt?: number;
   event?: string;
   branch?: string;
   prNumber?: number;
@@ -114,6 +116,18 @@ export async function POST(request: Request) {
   const run = await getRun(step.runId);
   if (!run) return json(404, { error: "Run not found" });
 
+  // A verdict belongs to the attempt that produced it. Answering a question or
+  // aborting a step bumps the attempt, which retires the runner working on the
+  // old one — and a late callback from that runner would otherwise be filed
+  // against the current attempt, describing code it never saw. The packet route
+  // already refuses a superseded token; this is the same refusal on the way back.
+  if (typeof body.attempt === "number" && body.attempt !== step.attempt) {
+    return json(409, {
+      error: "Superseded",
+      detail: `This callback is for attempt ${body.attempt}; the step is on attempt ${step.attempt}.`,
+    });
+  }
+
   switch (event) {
     case "implemented": {
       // The branch is pushed and the PR is open; gates run next.
@@ -147,7 +161,7 @@ export async function POST(request: Request) {
           });
         }
         const verdict = evaluateReproduction(gate, repro.failedAtBase, repro.passedAtHead);
-        await recordCheck({ stepId: step.id, ...verdict });
+        await recordCheck({ stepId: step.id, attempt: step.attempt, ...verdict });
         return json(200, { ok: true, verdict });
       }
 
@@ -158,7 +172,7 @@ export async function POST(request: Request) {
           typeof smoke?.baselineOk === "boolean" ? smoke.baselineOk : null,
           typeof smoke?.headOk === "boolean" ? smoke.headOk : null,
         );
-        await recordCheck({ stepId: step.id, ...verdict });
+        await recordCheck({ stepId: step.id, attempt: step.attempt, ...verdict });
         return json(200, { ok: true, verdict });
       }
 
@@ -170,6 +184,7 @@ export async function POST(request: Request) {
       }
       await recordCheck({
         stepId: step.id,
+        attempt: step.attempt,
         gate: gate as Gate,
         status: status as CheckStatus,
         summary:
@@ -193,7 +208,7 @@ export async function POST(request: Request) {
       const reproduction = project
         ? await requiredReproductionGate(run, project)
         : null;
-      const verdict = isReadyForDecision(await listChecks(step.id), reproduction);
+      const verdict = isReadyForDecision(await listChecks(step.id, step.attempt), reproduction);
       if (!verdict.ready) {
         return json(409, {
           error: "Not ready for a decision",
@@ -223,7 +238,7 @@ export async function POST(request: Request) {
         prompt: decisionPrompt(
           step.title,
           step.prNumber ?? (typeof body.prNumber === "number" ? body.prNumber : null),
-          await listChecks(step.id),
+          await listChecks(step.id, step.attempt),
         ),
       });
       return json(200, { ok: true, decisionId: decision.id });

@@ -560,6 +560,18 @@ export const agentChecks = sqliteTable(
     stepId: text("step_id")
       .notNull()
       .references(() => agentSteps.id, { onDelete: "cascade" }),
+    /**
+     * Which attempt produced this verdict.
+     *
+     * Without it, checks from every attempt sat in one undifferentiated list and
+     * readiness took the latest row per gate — so a gate that did not run in the
+     * current attempt was satisfied by an older attempt's verdict, measured
+     * against different code. Attempt 1 of the first answered step recorded no
+     * G3 at all and inherited attempt 0's; harmless there because a G3 skip
+     * describes the project rather than the change, but a stale G1 pass would
+     * have waved through code nothing had tested.
+     */
+    attempt: integer("attempt").notNull().default(0),
     gate: text("gate").$type<Gate>().notNull(),
     status: text("status").$type<CheckStatus>().notNull(),
     summary: text("summary").notNull(),
@@ -573,8 +585,9 @@ export const agentChecks = sqliteTable(
   },
   (t) => [
     index("agent_checks_step_idx").on(t.stepId),
-    // Re-running a gate on a new attempt appends a row; the latest per gate wins.
-    index("agent_checks_gate_idx").on(t.stepId, t.gate),
+    // Re-running a gate within one attempt appends a row; the latest wins. Across
+    // attempts the rows are kept apart, so an attempt is judged on its own gates.
+    index("agent_checks_gate_idx").on(t.stepId, t.attempt, t.gate),
   ],
 );
 
