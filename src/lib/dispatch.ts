@@ -1,7 +1,14 @@
 import type { AgentRun, AgentStep } from "@/db/schema";
 import { PROJECTS } from "@/lib/projects";
 import { signPacketToken } from "@/lib/agent-auth";
-import { acquireProjectLock, getStep, releaseProjectLock, setRunBaseline, updateStep } from "@/lib/runs";
+import {
+  acquireProjectLock,
+  getStep,
+  listChecks,
+  releaseProjectLock,
+  setRunBaseline,
+  updateStep,
+} from "@/lib/runs";
 import { getRun } from "@/lib/runs";
 import { branchNameFor } from "@/lib/agent-packet";
 
@@ -139,17 +146,29 @@ export async function dispatchStep(
 
   // Record the commit the run is anchored to before anything is dispatched.
   // G0 measures at this SHA; without it, nothing later can be attributed.
+  //
+  // A pinned baseline is only sacred once something has been measured against
+  // it. Until then it is a stale guess, and re-dispatching a step that never
+  // reported would branch from a commit the default branch has moved past —
+  // which fails in a way that looks nothing like its cause: a branch carrying
+  // an older copy of any workflow file is rejected on push, because GitHub
+  // reads that as modifying a workflow and GITHUB_TOKEN can never hold that
+  // permission. So re-resolve while no gate result depends on the old value.
   let baseSha = run.baseSha;
-  if (!baseSha) {
-    baseSha = await resolveDefaultBranchHead(project.repo);
-    if (!baseSha) {
+  const alreadyMeasured = (await listChecks(step.id)).length > 0;
+  if (!baseSha || !alreadyMeasured) {
+    const head = await resolveDefaultBranchHead(project.repo);
+    if (!head) {
       return {
         ok: false,
         reason: "baseline_unavailable",
         detail: `Could not resolve the head of ${project.repo}'s default branch`,
       };
     }
-    await setRunBaseline(run.id, baseSha);
+    if (head !== baseSha) {
+      await setRunBaseline(run.id, head);
+    }
+    baseSha = head;
   }
 
   const gotLock = await acquireProjectLock(project.id, step.id);

@@ -268,7 +268,13 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          git push --set-upstream origin "${BRANCH}"
+          # Forced because the branch name is derived from the run and step, so
+          # a re-dispatch of the same step targets the branch it created last
+          # time. The `idea/` and `fix/` prefixes are the agent's own namespace
+          # — nothing human-authored lives there, and the previous attempt's
+          # commit is disposable by definition. With a plain push, every retry
+          # fails as a non-fast-forward with no hint that a stale branch is why.
+          git push --force --set-upstream origin "${BRANCH}"
 
           {
             if [[ "${DRY_RUN}" == "true" ]]; then
