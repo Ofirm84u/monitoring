@@ -32,6 +32,11 @@ One shell for the whole runbook, so `$AGENT_SECRET` stays in scope. It must be
 byte-identical in two places, and a mismatch shows up later as an unexplained
 401 on the packet fetch.
 
+**Verify its length every time you write it somewhere — 64, always.** The server
+copy and the GitHub secret are the two places, and a placeholder pasted through
+by mistake is silent: `getSecret()` rejects anything under 32 characters, so the
+app fails closed and `dispatch` answers `unconfigured` with no hint as to why.
+
 ```bash
 AGENT_SECRET=$(openssl rand -hex 32)
 echo "$AGENT_SECRET"
@@ -59,10 +64,20 @@ cd /home/ofir/monitor
 # Back up the database before migrating. Seven tables are being added.
 cp app.db "app.db.bak-$(date +%F)"
 
-cat >> .env.production <<'EOF'
-AGENT_SECRET=PASTE_FROM_STEP_1
-APP_BASE_URL=https://mon.m84.me
-EOF
+# Write the real value, not a placeholder. Run this from the Mac shell that
+# still holds $AGENT_SECRET, so nothing has to be retyped:
+#
+#   ssh -i ~/.ssh/gcp_vm ofir@34.165.51.161 bash -s <<EOF
+#   cd /home/ofir/monitor
+#   grep -q '^AGENT_SECRET=' .env.production \
+#     && sed -i 's|^AGENT_SECRET=.*|AGENT_SECRET=${AGENT_SECRET}|' .env.production \
+#     || echo 'AGENT_SECRET=${AGENT_SECRET}' >> .env.production
+#   echo 'APP_BASE_URL=https://mon.m84.me' >> .env.production
+#   awk -F= '/^AGENT_SECRET=/{print "server length: " length(\$2)}' .env.production
+#   EOF
+#
+# Then CHECK IT. 64 is the only acceptable answer:
+awk -F= '/^AGENT_SECRET=/{print "server length: " length($2)}' .env.production
 
 git fetch origin
 git checkout feat/idea-runner
