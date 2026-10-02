@@ -33,8 +33,15 @@ export interface CreateRunInput {
   /** An articles.json id, or a `defects.id`. */
   sourceId: string;
   projectId: string;
-  implementationPlan: string;
-  qaPlan: string;
+  /**
+   * Optional because a run is now created *before* its plans are generated.
+   * Planning takes two model calls and tens of seconds; a run that only exists
+   * once they return is a run that vanishes if the process dies mid-request —
+   * which is exactly what happened in production. A defect run passes both in
+   * directly, since its plan is its triage and needs no model call.
+   */
+  implementationPlan?: string;
+  qaPlan?: string;
 }
 
 export async function createRun(input: CreateRunInput): Promise<AgentRun> {
@@ -44,12 +51,31 @@ export async function createRun(input: CreateRunInput): Promise<AgentRun> {
       source: input.source,
       sourceId: input.sourceId,
       projectId: input.projectId,
-      implementationPlan: input.implementationPlan,
-      qaPlan: input.qaPlan,
+      implementationPlan: input.implementationPlan ?? null,
+      qaPlan: input.qaPlan ?? null,
       status: "planning",
     })
     .returning();
   return run;
+}
+
+/**
+ * Fill in the plans of a run that was created before they existed.
+ *
+ * Leaves `status` alone: the caller decides whether planning finishing means
+ * the run is ready (`baseline`) or still has work to do, and conflating the two
+ * here would hide a failure behind a successful write.
+ */
+export async function setRunPlans(
+  id: string,
+  plans: { implementationPlan: string; qaPlan: string },
+): Promise<AgentRun | null> {
+  const [run] = await db
+    .update(agentRuns)
+    .set({ ...plans, updatedAt: new Date() })
+    .where(eq(agentRuns.id, id))
+    .returning();
+  return run ?? null;
 }
 
 export async function getRun(id: string): Promise<AgentRun | null> {

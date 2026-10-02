@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { readFile } from "fs/promises";
 import { isAuthenticatedOrBot } from "@/lib/auth";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { getArticle, updateArticle } from "@/lib/articles";
+import { getArticle } from "@/lib/articles";
 import { PROJECTS } from "@/lib/projects";
-import { planArticleImplementation, planArticleQA } from "@/lib/claude";
 import { createTask } from "@/lib/tasks";
-import { createRun, createSteps } from "@/lib/runs";
-import { buildSteps } from "@/lib/plan-parse";
+import { createRun, findRunBySource, listSteps } from "@/lib/runs";
+import { fillArticlePlans } from "@/lib/article-planning";
 
 const RATE_LIMIT = { maxAttempts: 5, windowMs: 60 * 1000 };
 const MAX_CODE_CONTEXT_CHARS = 12_000;
@@ -69,57 +68,51 @@ export async function POST(request: Request, { params }: RouteContext) {
 
   const codeContext = await loadCodeContext(projectId);
 
-  let implPlan: Awaited<ReturnType<typeof planArticleImplementation>>;
-  let qaPlan: Awaited<ReturnType<typeof planArticleQA>>;
-
-  try {
-    [implPlan, qaPlan] = await Promise.all([
-      planArticleImplementation(project, article, codeContext),
-      planArticleQA(project, article),
-    ]);
-  } catch (err) {
-    return json(502, {
-      error: err instanceof Error ? err.message : "Plan generation failed",
-    });
-  }
-
-  // Persist the run before anything else. These two plans used to exist only in
-  // the response body below, so nothing could dispatch or resume the work they
-  // describe once the request ended.
-  const run = await createRun({
-    source: "article",
-    sourceId: id,
-    projectId,
-    implementationPlan: implPlan.text,
-    qaPlan: qaPlan.text,
-  });
-
-  // Steps come from the plan's own sections, not from the summary's key ideas —
-  // the unit of work is a step, and scoping a run by key ideas would track
-  // something other than what gets built.
-  const steps = await createSteps(run.id, buildSteps(implPlan.text, qaPlan.text));
-
-  // Create one task per key idea — sequential to avoid concurrent writes to tasks.json.tmp
+  // Create one task per key idea — sequential to avoid concurrent writes to
+  // tasks.json.tmp. These come from the summary, not the plan, so they need no
+  // model call and belong on the fast path.
   const tasksCreated = [];
   for (const idea of article.summary.keyIdeas ?? []) {
     tasksCreated.push(await createTask(idea, projectId));
   }
 
-  // Mark the article as having an implementation plan
-  await updateArticle(id, {
-    implementationPlan: {
-      projectId,
-      generatedAt: new Date().toISOString(),
-    },
-  });
+  // Reuse a run that was left mid-planning rather than stacking a duplicate on
+  // top of it. A run stuck at "planning" with no steps is the signature of a
+  // process that died before its plans landed; re-activating is how you retry.
+  const run = (await resumableRun(id)) ?? (await createRun({
+    source: "article",
+    sourceId: id,
+    projectId,
+  }));
 
-  return json(200, {
+  // The two planning calls take tens of seconds. Holding the response open for
+  // them is what lost every result in production: a restart mid-flight left the
+  // caller with a 502 and the database with nothing. `after()` keeps the work
+  // on this process without keeping the caller waiting for it.
+  after(() => fillArticlePlans({ runId: run.id, articleId: id, project, article, codeContext }));
+
+  return json(202, {
     runId: run.id,
-    implementationPlan: implPlan.text,
-    qaPlan: qaPlan.text,
-    steps: steps.map((s) => ({ id: s.id, idx: s.idx, title: s.title })),
+    status: "planning",
+    // Planning is no longer finished when this returns, so the only honest
+    // answer about steps is where to look for them.
+    statusUrl: `/api/agent/runs/${run.id}`,
     tasksCreated,
     projectId,
     projectName: project.name,
   });
+}
+
+/**
+ * A previous run for this article that never got past planning, if there is one.
+ *
+ * Narrow on purpose: a run with steps already parsed is a real run, and
+ * re-activating should plan afresh rather than silently adopt it.
+ */
+async function resumableRun(articleId: string) {
+  const existing = await findRunBySource("article", articleId);
+  if (!existing) return null;
+  if (existing.status !== "planning" && existing.status !== "failed") return null;
+  const steps = await listSteps(existing.id);
+  return steps.length === 0 ? existing : null;
 }
