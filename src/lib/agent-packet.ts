@@ -79,6 +79,16 @@ export interface AgentPacket {
     title: string;
     instruction: string;
     acceptance: string[];
+    /**
+     * A question a previous attempt asked, and the answer it was given.
+     *
+     * The whole point of letting the implementer ask instead of guess is that the
+     * answer comes back to it. Without these the packet for attempt 2 was
+     * identical to attempt 1, so an answered question changed nothing and the
+     * same question would be asked again.
+     */
+    priorQuestion: string | null;
+    answer: string | null;
   };
   /** Present only for defect runs; shapes how the fix must be proven. */
   defect: DefectContext | null;
@@ -173,6 +183,14 @@ function buildRules(
   return rules;
 }
 
+/** Markdown block quote, so a multi-line answer cannot break the prompt's structure. */
+function quoteBlock(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
 export function buildPacket(input: {
   run: AgentRun;
   step: AgentStep;
@@ -243,6 +261,8 @@ export function buildPacket(input: {
       title: step.title,
       instruction: step.instruction,
       acceptance: step.acceptance ?? [],
+      priorQuestion: step.question ?? null,
+      answer: step.answer ?? null,
     },
     defect: defectContext,
     reproductionGate,
@@ -287,6 +307,23 @@ export function buildImplementerPrompt(input: {
   );
 
   sections.push(`## The change\n\n### ${step.title}\n\n${step.instruction}`);
+
+  // A previous attempt asked rather than guessed, and was answered. Putting both
+  // in front of this attempt is the only thing that makes asking worth doing —
+  // without it the packet for attempt 2 is identical to attempt 1, and the same
+  // question gets asked again. The question is included alongside the answer
+  // because an answer like "use httpx" means nothing without it.
+  if (step.answer) {
+    const lines = ["## You asked, and this is the answer", ""];
+    if (step.question) {
+      lines.push("A previous attempt asked:", "", quoteBlock(step.question), "");
+    }
+    lines.push("The answer:", "", quoteBlock(step.answer), "");
+    lines.push(
+      "Proceed on that basis. If it still leaves something genuinely undecidable, ask again rather than guessing — but do not re-ask what has just been answered.",
+    );
+    sections.push(lines.join("\n"));
+  }
 
   if (defect) {
     const lines = [

@@ -93,8 +93,20 @@ export async function POST(request: Request) {
       status: "queued",
       attempt: step.attempt + 1,
     });
+    // Release the lock, as merge and reject both do. It means "a dispatch is in
+    // flight", and after an answer the step is queued rather than running.
+    // Without this the answer path was a dead end: `acquireProjectLock` fails on
+    // the existing row even for the same step, so the re-dispatch this answer
+    // exists to enable would have returned 409 locked for ever.
+    await releaseProjectLock(run.projectId);
     await setRunStatus(run.id, "running");
-    return json(200, { ok: true, step: { id: step.id, status: "queued" } });
+    return json(200, {
+      ok: true,
+      step: { id: step.id, status: "queued", attempt: step.attempt + 1 },
+      // Said plainly because nothing else will: answering does not re-run the
+      // step, it only makes it runnable again.
+      next: "Dispatch this step again to run it with the answer in its packet.",
+    });
   }
 
   if (!step.prNumber) {

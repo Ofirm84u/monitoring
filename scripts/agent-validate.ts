@@ -823,6 +823,41 @@ const promptDefect = {
   reproSteps: "Pick 16:00, confirm",
 } as never;
 
+// Answering a question is only worth doing if the answer reaches the next attempt.
+const answeredPrompt = buildImplementerPrompt({
+  project: promptProject,
+  step: {
+    ...(promptStep as object),
+    question: "Use the anthropic SDK, or httpx which is already a dependency?",
+    answer: "Use httpx 0.28.1 — it is already in requirements.txt.",
+  } as never,
+  defect: null,
+  reproductionGate: null,
+  rules: ["Change only what this step describes."],
+});
+check(
+  "an answered question reaches the next attempt's prompt",
+  answeredPrompt.includes("httpx 0.28.1"),
+);
+check(
+  "the question travels with its answer, which alone would mean nothing",
+  answeredPrompt.includes("anthropic SDK, or httpx"),
+);
+check(
+  "and the implementer is told not to re-ask it",
+  answeredPrompt.includes("do not re-ask what has just been answered"),
+);
+check(
+  "a first attempt is not told about an answer it never got",
+  !buildImplementerPrompt({
+    project: promptProject,
+    step: promptStep,
+    defect: null,
+    reproductionGate: null,
+    rules: ["Change only what this step describes."],
+  }).includes("You asked, and this is the answer"),
+);
+
 const statePrompt = buildImplementerPrompt({
   project: promptProject,
   step: promptStep,
