@@ -143,6 +143,12 @@ function buildRules(
   const rules = [
     "Change only what this step describes. Anything else is a separate step.",
     "Never edit a denied path. If the step cannot be done without one, stop and ask.",
+    // The first real run obeyed the rule above and still produced a change that
+    // cannot ship: a SQLAlchemy model for a table with no migration, because the
+    // migration belongs under a denied path. Every gate passed it — the tests
+    // build their own schema, so nothing failed — and the gap would only appear
+    // on deploy. Not editing a denied path is not the same as not needing one.
+    "A change that needs a denied path to be complete is not complete. A model without its migration, or an import without its dependency, passes tests and breaks on deploy. Report a question instead of leaving that behind.",
     "Cite a file only after reading it. Do not invent paths or symbols.",
     "If a decision is genuinely ambiguous, report a question instead of guessing.",
   ];

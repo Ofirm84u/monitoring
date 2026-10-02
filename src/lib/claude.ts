@@ -690,7 +690,7 @@ export async function analyzeDefect(
  * raise a concern but cannot pass a change on its own.
  * ===================================================================== */
 
-const REVIEW_MAX_TOKENS = 4000;
+const REVIEW_MAX_TOKENS = 8000;
 const MAX_DIFF_CHARS = 60_000;
 const VERDICT_VALUES = new Set(["met", "not_met", "unclear"]);
 
@@ -728,35 +728,45 @@ function validateReview(parsed: unknown, criteria: string[]): AcceptanceReview {
   const o = parsed as Record<string, unknown>;
   if (!Array.isArray(o.verdicts)) throw new Error("Review returned no verdicts");
 
-  const verdicts: CriterionVerdict[] = [];
+  // Verdicts arrive keyed by the criterion's number, and the text is filled in
+  // here from the list that was sent. Asking the reviewer to echo each criterion
+  // verbatim was what exhausted the output budget on the first real diff — ten
+  // long criteria repeated back, plus evidence for each, hit max_tokens and the
+  // whole gate was lost. Matching on that echoed text was also fragile: a
+  // single reworded character counted as a different criterion, so the original
+  // was reported unaddressed *and* the reworded one kept, inflating the total.
+  const byIndex = new Map<number, CriterionVerdict["verdict"]>();
+  const evidenceByIndex = new Map<number, string>();
   for (const raw of o.verdicts) {
     if (typeof raw !== "object" || raw === null) continue;
     const v = raw as Record<string, unknown>;
-    if (typeof v.criterion !== "string" || typeof v.verdict !== "string") continue;
-    if (!VERDICT_VALUES.has(v.verdict)) continue;
-    verdicts.push({
-      criterion: v.criterion.slice(0, 300),
-      verdict: v.verdict as CriterionVerdict["verdict"],
-      evidence: typeof v.evidence === "string" ? v.evidence.slice(0, 600) : "",
-    });
+    const index = typeof v.index === "number" ? Math.trunc(v.index) : NaN;
+    if (!Number.isInteger(index) || index < 1 || index > criteria.length) continue;
+    if (typeof v.verdict !== "string" || !VERDICT_VALUES.has(v.verdict)) continue;
+    byIndex.set(index, v.verdict as CriterionVerdict["verdict"]);
+    evidenceByIndex.set(
+      index,
+      typeof v.evidence === "string" ? v.evidence.slice(0, 600) : "",
+    );
   }
 
-  if (verdicts.length === 0) {
+  if (byIndex.size === 0) {
     throw new Error("Review returned no usable verdicts");
   }
 
-  // A criterion the reviewer skipped is not a criterion that passed. Anything
-  // missing from the response is recorded as unclear rather than dropped.
-  const covered = new Set(verdicts.map((v) => v.criterion));
-  for (const criterion of criteria) {
-    if (!covered.has(criterion)) {
-      verdicts.push({
-        criterion,
-        verdict: "unclear",
-        evidence: "The reviewer did not address this criterion.",
-      });
-    }
-  }
+  // One entry per criterion, always, in the order they were given. A criterion
+  // the reviewer skipped is not a criterion that passed.
+  const verdicts: CriterionVerdict[] = criteria.map((criterion, i) => {
+    const index = i + 1;
+    const verdict = byIndex.get(index);
+    return verdict
+      ? { criterion: criterion.slice(0, 300), verdict, evidence: evidenceByIndex.get(index) ?? "" }
+      : {
+          criterion: criterion.slice(0, 300),
+          verdict: "unclear" as const,
+          evidence: "The reviewer did not address this criterion.",
+        };
+  });
 
   return {
     verdicts,
@@ -787,7 +797,7 @@ Return ONLY a valid JSON object — no markdown fences, no commentary. Schema:
 {
   "verdicts": [
     {
-      "criterion": "string — copy the criterion EXACTLY as given, character for character",
+      "index": number — the criterion's number from the list below, exactly as numbered,
       "verdict": "met" | "not_met" | "unclear",
       "evidence": "string — cite the specific hunk, file, or line that justifies the verdict"
     }
@@ -796,7 +806,7 @@ Return ONLY a valid JSON object — no markdown fences, no commentary. Schema:
 }
 
 RULES:
-- Return one entry for EVERY criterion given, in the order given. Do not merge, split, or reword them.
+- Return one entry for EVERY criterion given, in the order given, identified by its number. Do not merge or split them, and do not echo the criterion text back — the number is enough.
 - "met" requires evidence visible in the diff. A change that looks like it was probably done is "unclear", not "met".
 - "not_met" means the diff contradicts the criterion or plainly omits it.
 - "unclear" means the diff neither shows nor contradicts it — for example a runtime behaviour no static reading can settle. Prefer "unclear" over an optimistic "met"; a wrong "met" is the one mistake here that actually costs something.
