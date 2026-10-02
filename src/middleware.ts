@@ -20,6 +20,14 @@ const PUBLIC_ROUTES = [
   "/api/alert",
   "/api/auth", // Auth.js (NextAuth) handlers, incl. Google callback
   "/api/spike", // PM Hub spike routes (self-authenticated)
+  // Idea Runner agent routes. These carry no session and no bot token: the
+  // callback and review endpoints are authenticated by an HMAC signature over
+  // the raw body, and the packet endpoint by a short-lived token bound to the
+  // step and its attempt — both verified in the handler, which also means the
+  // dispatch and decision endpoints still enforce isAuthenticatedOrBot.
+  // Without this entry the middleware rejects GitHub Actions at the edge and
+  // the gate results never arrive.
+  "/api/agent",
 ];
 
 export default auth((request) => {
