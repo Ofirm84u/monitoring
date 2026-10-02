@@ -193,12 +193,12 @@ jobs:
           BASE_SHA: ${{ steps.packet.outputs.base_sha }}
         run: |
           set -uo pipefail
-          eval "${VERIFY_CMD}" > g0.log 2>&1 && code=0 || code=$?
+          eval "${VERIFY_CMD}" > "${RUNNER_TEMP}/g0.log" 2>&1 && code=0 || code=$?
           if [[ ${code} -eq 0 ]]; then
-            "${RUNNER_TEMP}/report-gate.sh" G0 pass "Baseline green at ${BASE_SHA}" g0.log
+            "${RUNNER_TEMP}/report-gate.sh" G0 pass "Baseline green at ${BASE_SHA}" "${RUNNER_TEMP}/g0.log"
           else
             "${RUNNER_TEMP}/report-gate.sh" G0 fail \
-              "Baseline is RED at ${BASE_SHA} (exit ${code}) — breakage cannot be attributed, so the run is aborted" g0.log
+              "Baseline is RED at ${BASE_SHA} (exit ${code}) — breakage cannot be attributed, so the run is aborted" "${RUNNER_TEMP}/g0.log"
             echo "::error::Baseline is red. Fix the default branch before running the agent here."
             exit 1
           fi
@@ -210,7 +210,7 @@ jobs:
           SMOKE_CMD: ${{ steps.packet.outputs.smoke_cmd }}
         run: |
           set -uo pipefail
-          eval "${SMOKE_CMD}" > g3-base.log 2>&1 && ok=true || ok=false
+          eval "${SMOKE_CMD}" > "${RUNNER_TEMP}/g3-base.log" 2>&1 && ok=true || ok=false
           echo "baseline_ok=${ok}" >> "$GITHUB_OUTPUT"
 
       - name: Create the branch
@@ -228,6 +228,7 @@ jobs:
           git commit --allow-empty -m "chore(idea-runner): round-trip check"
 
       - name: Run the implementer
+        id: implement
         if: ${{ !inputs.dry_run }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -244,10 +245,27 @@ jobs:
             --permission-mode bypassPermissions \
             --disallowed-tools "WebFetch WebSearch" \
             --output-format text \
-            | tee implementer.log
+            | tee "${RUNNER_TEMP}/implementer.log"
 
+          # An implementer that produced nothing has not failed — more often it
+          # has found that the step cannot be done as written, and said why. The
+          # first real run hit exactly that: the plan assumed a content pipeline
+          # this repo does not have, and the migration it would need lives under
+          # a denied path. That is a question for a person, not an error and
+          # certainly not a pull request.
+          #
+          # This guard used to be defeated by the workflow's own artifacts: the
+          # gate logs were written into the working tree, so `git status` was
+          # never empty and `git add -A` committed them. The run then opened a
+          # PR whose entire content was two log files, and G2 passed it — within
+          # budget, no denied paths — because scope is not substance.
           if [[ -z "$(git status --porcelain)" && -z "$(git log --oneline "${{ steps.packet.outputs.base_sha }}"..HEAD)" ]]; then
-            echo "::error::The implementer produced no change at all"
+            echo "parked=true" >> "$GITHUB_OUTPUT"
+            question="$(tail -c 4000 "${RUNNER_TEMP}/implementer.log")"
+            "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
+              --arg stepId "${STEP_ID}" --arg question "${question}" \
+              '{stepId:$stepId, event:"question", question:$question}')" || true
+            echo "::error::The implementer produced no change and asked a question instead. The run is parked for an answer; nothing was pushed."
             exit 1
           fi
           # Anything left uncommitted is still part of the change; commit it so
@@ -319,13 +337,13 @@ jobs:
           VERIFY_CMD: ${{ steps.packet.outputs.verify_cmd }}
         run: |
           set -uo pipefail
-          eval "${VERIFY_CMD}" > g1.log 2>&1 && code=0 || code=$?
+          eval "${VERIFY_CMD}" > "${RUNNER_TEMP}/g1.log" 2>&1 && code=0 || code=$?
           echo "passed=$([[ ${code} -eq 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           if [[ ${code} -eq 0 ]]; then
-            "${RUNNER_TEMP}/report-gate.sh" G1 pass "Verify command passes on the branch" g1.log
+            "${RUNNER_TEMP}/report-gate.sh" G1 pass "Verify command passes on the branch" "${RUNNER_TEMP}/g1.log"
           else
             "${RUNNER_TEMP}/report-gate.sh" G1 fail \
-              "Verify command fails on the branch (exit ${code}) while the baseline was green" g1.log
+              "Verify command fails on the branch (exit ${code}) while the baseline was green" "${RUNNER_TEMP}/g1.log"
             exit 1
           fi
 
@@ -337,7 +355,7 @@ jobs:
           BASELINE_OK: ${{ steps.smoke_base.outputs.baseline_ok }}
         run: |
           set -uo pipefail
-          eval "${SMOKE_CMD}" > g3-head.log 2>&1 && head_ok=true || head_ok=false
+          eval "${SMOKE_CMD}" > "${RUNNER_TEMP}/g3-head.log" 2>&1 && head_ok=true || head_ok=false
           # Observations only — evaluateSmoke on the server decides the verdict,
           # including the case where the app was already down at the baseline.
           "${RUNNER_TEMP}/post-signed.sh" "${CALLBACK_URL}" "$(jq -nc \
@@ -372,7 +390,7 @@ jobs:
             exit 1
           fi
 
-          eval "${VERIFY_CMD}" > g5.log 2>&1 && base_code=0 || base_code=$?
+          eval "${VERIFY_CMD}" > "${RUNNER_TEMP}/g5.log" 2>&1 && base_code=0 || base_code=$?
           failed_at_base=$([[ ${base_code} -ne 0 ]] && echo true || echo false)
           git checkout -- . && git clean -fd
           git switch "${{ steps.packet.outputs.branch }}"
@@ -423,7 +441,11 @@ jobs:
             '{stepId:$stepId, event:"ready"}')"
 
       - name: Report failure
-        if: failure()
+        # Not when the implementer parked the run with a question. The job is red
+        # either way — it produced nothing — but the server state differs, and
+        # reporting `failed` here would overwrite `awaiting_answer` and lose the
+        # question the implementer asked.
+        if: ${{ failure() && steps.implement.outputs.parked != 'true' }}
         run: |
           set -euo pipefail
           # Best effort: the run already failed, and a failing callback here
