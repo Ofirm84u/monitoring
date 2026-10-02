@@ -646,33 +646,73 @@ check(
   evaluateReproduction("G5-A", false, true).summary.includes("never reproduced"),
 );
 
+// A full ladder is G0, G1, G2 and G3. Reproduction gates are required only when
+// the run has one, which the caller supplies.
+const FULL = [
+  { gate: "G0", status: "pass" },
+  { gate: "G1", status: "pass" },
+  { gate: "G2", status: "pass" },
+  { gate: "G3", status: "pass" },
+] as const;
+
+check("a complete, passing ladder is ready", isReadyForDecision([...FULL]).ready);
 check(
-  "all gates passing is ready",
-  isReadyForDecision([
+  "a blocking gate that never reported is NOT ready",
+  !isReadyForDecision([
     { gate: "G0", status: "pass" },
     { gate: "G1", status: "pass" },
     { gate: "G2", status: "pass" },
   ]).ready,
 );
 check(
+  "and it names the gate that stayed silent",
+  isReadyForDecision([
+    { gate: "G0", status: "pass" },
+    { gate: "G1", status: "pass" },
+    { gate: "G2", status: "pass" },
+  ]).missing.includes("G3"),
+);
+check(
   "a failed blocking gate is not ready",
-  !isReadyForDecision([{ gate: "G1", status: "pass" }, { gate: "G2", status: "fail" }]).ready,
+  !isReadyForDecision([...FULL.slice(0, 3), { gate: "G3", status: "fail" }]).ready,
+);
+check(
+  "a skip satisfies a required gate — it is a recorded verdict, not a silence",
+  isReadyForDecision([...FULL.slice(0, 3), { gate: "G3", status: "skip" }]).ready,
 );
 check(
   "an advisory G4 never blocks",
-  isReadyForDecision([{ gate: "G1", status: "pass" }, { gate: "G4", status: "advisory" }]).ready,
+  isReadyForDecision([...FULL, { gate: "G4", status: "advisory" }]).ready,
+);
+check(
+  "a required reproduction gate that never reported blocks",
+  !isReadyForDecision([...FULL], "G5-A").ready,
 );
 check(
   "a failed reproduction gate blocks",
-  !isReadyForDecision([{ gate: "G5-A", status: "fail" }]).ready,
+  !isReadyForDecision([...FULL, { gate: "G5-A", status: "fail" }], "G5-A").ready,
+);
+check(
+  "a passing reproduction gate completes the ladder",
+  isReadyForDecision([...FULL, { gate: "G5-A", status: "pass" }], "G5-A").ready,
+);
+check(
+  "a reproduction gate the run does not have is not demanded",
+  isReadyForDecision([...FULL], null).ready,
 );
 check(
   "the visual gate is for a human and does not block automatically",
-  isReadyForDecision([{ gate: "G5-C", status: "advisory" }]).ready,
+  isReadyForDecision([...FULL, { gate: "G5-C", status: "advisory" }], null).ready,
 );
 check(
   "a re-run gate result supersedes the earlier one",
-  isReadyForDecision([{ gate: "G1", status: "fail" }, { gate: "G1", status: "pass" }]).ready,
+  isReadyForDecision([
+    { gate: "G0", status: "pass" },
+    { gate: "G1", status: "fail" },
+    { gate: "G1", status: "pass" },
+    { gate: "G2", status: "pass" },
+    { gate: "G3", status: "pass" },
+  ]).ready,
 );
 
 /* --------------------------------------------------- smoke + implementer -- */

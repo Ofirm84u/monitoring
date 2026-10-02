@@ -6,7 +6,8 @@ import {
   verifySignature,
 } from "@/lib/agent-auth";
 import { getRun, getStep, listChecks, recordCheck } from "@/lib/runs";
-import { evaluateDiffBudget, isReadyForDecision } from "@/lib/gates";
+import { evaluateDiffBudget, evaluateSmoke, isReadyForDecision } from "@/lib/gates";
+import { requiredReproductionGate } from "@/lib/reproduction";
 import { reviewAcceptance } from "@/lib/claude";
 import { PROJECTS } from "@/lib/projects";
 
@@ -79,6 +80,26 @@ export async function POST(request: Request) {
     (f): f is string => typeof f === "string",
   );
 
+  // G3 is required, and on a project with no smoke command the workflow's G3
+  // steps never run — so nothing reported, and an unreported blocking gate used
+  // to read as a pass. Record the verdict the contract already implies: a skip
+  // that names the gap, which a reviewer can weigh. If a smoke command *is*
+  // declared and still nothing arrived, evaluateSmoke says so and blocks.
+  const existing = await listChecks(step.id);
+  if (!existing.some((check) => check.gate === "G3")) {
+    const smoke = evaluateSmoke(project.verify?.smokeCmd ?? null, null, null);
+    await recordCheck({
+      stepId: step.id,
+      gate: smoke.gate,
+      status: smoke.status,
+      summary: smoke.summary,
+      evidence: smoke.evidence,
+    });
+  }
+
+  const reproduction = await requiredReproductionGate(run, project);
+  const readiness = async () => isReadyForDecision(await listChecks(step.id), reproduction);
+
   // G2 first. A diff that already broke scope should not also cost a model call,
   // and its verdict would be meaningless anyway — the change under review is not
   // the change that was planned.
@@ -96,12 +117,7 @@ export async function POST(request: Request) {
   });
 
   if (scope.status === "fail") {
-    const checks = await listChecks(step.id);
-    return json(200, {
-      scope,
-      review: null,
-      ...isReadyForDecision(checks),
-    });
+    return json(200, { scope, review: null, ...(await readiness()) });
   }
 
   // G4. Advisory: it records a verdict per criterion and can raise concerns,
@@ -134,8 +150,7 @@ export async function POST(request: Request) {
             : `${review.metCount} of ${review.totalCount} criteria met; ${unmet.length} unresolved`,
         evidence: review,
       });
-      const checks = await listChecks(step.id);
-      return json(200, { scope, review, ...isReadyForDecision(checks) });
+      return json(200, { scope, review, ...(await readiness()) });
     } catch (err) {
       // A review that could not run is recorded as such. Treating a failed
       // review as a pass would quietly remove the gate.
@@ -149,6 +164,5 @@ export async function POST(request: Request) {
     }
   }
 
-  const checks = await listChecks(step.id);
-  return json(200, { scope, review: null, ...isReadyForDecision(checks) });
+  return json(200, { scope, review: null, ...(await readiness()) });
 }

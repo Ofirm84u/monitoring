@@ -9,6 +9,7 @@ import {
   createDecision,
   getRun,
   getStep,
+  listChecks,
   recordCheck,
   releaseProjectLock,
   setRunStatus,
@@ -16,7 +17,9 @@ import {
   updateStep,
 } from "@/lib/runs";
 import { GATES, type CheckStatus, type Gate } from "@/db/schema";
-import { evaluateReproduction, evaluateSmoke } from "@/lib/gates";
+import { evaluateReproduction, evaluateSmoke, isReadyForDecision } from "@/lib/gates";
+import { PROJECTS } from "@/lib/projects";
+import { requiredReproductionGate } from "@/lib/reproduction";
 
 /**
  * Where the workflow reports back.
@@ -181,9 +184,39 @@ export async function POST(request: Request) {
     }
 
     case "ready": {
+      // "ready" is the runner's claim, not a verdict. The workflow does check
+      // the review endpoint's answer before posting this, but that check lives
+      // on the runner — and a runner is exactly what this design refuses to
+      // take the word of. The decision token is minted here, so this is where
+      // readiness has to be established, from the gate rows the server wrote.
+      const project = PROJECTS.find((p) => p.id === run.projectId);
+      const reproduction = project
+        ? await requiredReproductionGate(run, project)
+        : null;
+      const verdict = isReadyForDecision(await listChecks(step.id), reproduction);
+      if (!verdict.ready) {
+        return json(409, {
+          error: "Not ready for a decision",
+          blockedBy: verdict.blockedBy,
+          missing: verdict.missing,
+          detail:
+            verdict.missing.length > 0
+              ? `These gates never reported: ${verdict.missing.join(", ")}. A gate that did not run is not a gate that passed.`
+              : `Blocked by ${verdict.blockedBy.join(", ")}.`,
+        });
+      }
+
       // Gates have run. The step now waits on a person — the lock deliberately
       // stays held, so no other step starts on this repo while a PR is pending.
       await setStepStatus(step.id, "awaiting_decision");
+      // Clear a failure left by an earlier attempt. Without this, a run whose
+      // first dispatch failed stayed `failed` for ever while its step sat at
+      // `awaiting_decision` with an open PR — the listing showed a stale error
+      // beside a step asking to be merged, which is the kind of disagreement
+      // that makes a status worth less than no status at all.
+      if (run.status !== "running") {
+        await setRunStatus(run.id, "running");
+      }
       const decision = await createDecision({
         stepId: step.id,
         kind: "approve",

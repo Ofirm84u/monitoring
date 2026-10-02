@@ -216,8 +216,20 @@ export function evaluateReproduction(
   };
 }
 
-/** Gates that must pass before a step may be offered for a decision. */
-const BLOCKING_GATES: readonly Gate[] = ["G0", "G1", "G2", "G3", "G5-A", "G5-B"];
+/**
+ * Gates every step must have reported before it may be offered for a decision.
+ *
+ * G5-A and G5-B are deliberately absent: at most one of them applies to any
+ * given step, and most steps have neither, so requiring both would block every
+ * run. The applicable one is passed to `isReadyForDecision` by the caller,
+ * which is the only place that knows what kind of run this is.
+ *
+ * G3 is required even where a project declares no smoke command, because
+ * `evaluateSmoke` answers that case with an explicit `skip` that names the gap.
+ * A recorded "nothing checks this" is a fact a reviewer can weigh; an absent
+ * row is one they never learn about.
+ */
+const ALWAYS_REQUIRED: readonly Gate[] = ["G0", "G1", "G2", "G3"];
 
 /**
  * Whether a step is ready for a human.
@@ -228,15 +240,34 @@ const BLOCKING_GATES: readonly Gate[] = ["G0", "G1", "G2", "G3", "G5-A", "G5-B"]
  */
 export function isReadyForDecision(
   verdicts: Array<{ gate: Gate; status: CheckStatus }>,
-): { ready: boolean; blockedBy: Gate[] } {
+  /**
+   * The reproduction gate this step is expected to satisfy, or null when it has
+   * none — an article run, or a visual defect, where G5-C is a human's call.
+   * Passed in rather than inferred, because only the caller knows the run.
+   */
+  requiredReproduction: Gate | null = null,
+): { ready: boolean; blockedBy: Gate[]; missing: Gate[] } {
   const latest = new Map<Gate, CheckStatus>();
   for (const verdict of verdicts) latest.set(verdict.gate, verdict.status);
 
-  const blockedBy = [...latest.entries()]
-    .filter(([gate, status]) => BLOCKING_GATES.includes(gate) && status === "fail")
-    .map(([gate]) => gate);
+  const required: Gate[] = [...ALWAYS_REQUIRED];
+  if (requiredReproduction) required.push(requiredReproduction);
 
-  return { ready: blockedBy.length === 0, blockedBy };
+  const failed = required.filter((gate) => latest.get(gate) === "fail");
+
+  // A gate that never reported is not a gate that passed. Readiness used to be
+  // computed only over the checks that existed, so a blocking gate which never
+  // ran could not appear in `blockedBy` — silence was indistinguishable from a
+  // pass, which is the one thing this ladder exists to prevent. G3 demonstrated
+  // it in the first live run: no row recorded, and the step was handed a
+  // decision token anyway.
+  const missing = required.filter((gate) => !latest.has(gate));
+
+  return {
+    ready: failed.length === 0 && missing.length === 0,
+    blockedBy: [...failed, ...missing],
+    missing,
+  };
 }
 
 /**
