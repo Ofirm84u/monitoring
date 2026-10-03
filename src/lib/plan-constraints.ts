@@ -52,3 +52,35 @@ Therefore:
 - Do not invent a location. A directory you have not seen in the listing does not exist, and neither does a module you have not seen — if a symbol you need lives somewhere, name the file from the listing that defines it rather than assuming a conventional path.
 `;
 }
+
+/**
+ * The implementation plan, given to the QA planner.
+ *
+ * These two plans used to be generated in parallel from the same article and
+ * never shown to each other. They agreed by coincidence — both read "citation
+ * monitoring" out of the article and wrote about that — until the implementation
+ * planner started receiving the repository's real constraints and chose
+ * different work. The QA planner, still working from the article alone, then
+ * produced criteria naming `run_citation_check`, `citation_log`, psycopg2 and
+ * `anthropic.APIError` for a change that was two TypeScript files.
+ *
+ * G4 graded the diff against those criteria and answered "unclear" eleven times
+ * out of eleven, which was the honest answer to a question about a different
+ * project. Acceptance criteria have to describe the plan that will actually be
+ * carried out, so the QA planner is given it.
+ */
+export function buildQaPlanContextBlock(implementationPlan?: string | null): string {
+  if (!implementationPlan?.trim()) return "";
+
+  return `
+THE IMPLEMENTATION PLAN YOU ARE WRITING CRITERIA FOR. This is the change that will actually be made — not a suggestion, and not something to improve upon:
+
+${implementationPlan.trim()}
+
+Therefore:
+- Every criterion must be verifiable against THAT plan. Name the files, functions and symbols it names; do not introduce others.
+- Do not write criteria for work the plan does not contain. A criterion nothing in the plan addresses cannot be met, and reports as a failure of the change rather than of the criterion.
+- Tag each criterion with the step it belongs to, as "(שלב N)". The steps are reviewed one at a time, and a criterion that belongs to a later step must be recognisable as such.
+- Prefer criteria a reviewer can settle by reading the diff. Where a check genuinely requires running the code, say so explicitly in the criterion.
+`;
+}

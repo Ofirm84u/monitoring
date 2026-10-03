@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PROJECTS, type ProjectConfig } from "./projects";
-import { buildPlanConstraintsBlock } from "./plan-constraints";
+import { buildPlanConstraintsBlock, buildQaPlanContextBlock } from "./plan-constraints";
 import type { RepoManifest } from "./repo-manifests";
 import type { Article, ArticleSuggestion, ArticleSummary } from "./articles";
 
@@ -272,6 +272,12 @@ ${keyIdeas}${gapBlock}`;
 export async function planArticleQA(
   project: ProjectConfig,
   article: Article,
+  /**
+   * The implementation plan these criteria must verify. Optional only so the
+   * older caller keeps compiling; without it the two plans describe different
+   * work and every criterion reports as unmet.
+   */
+  implementationPlan?: string | null,
 ): Promise<ArticlePlan> {
   const lang = codeLanguage(project.stack);
   const keyIdeas = article.summary?.keyIdeas.map((k) => `  - ${k}`).join("\n") ?? "";
@@ -283,7 +289,7 @@ export async function planArticleQA(
 
 PROJECT: ${project.name}
 STACK: ${project.stack.join(", ")}
-
+${buildQaPlanContextBlock(implementationPlan)}
 RULES:
 - Respond in HEBREW. Use English for code identifiers, test names, CLI commands.
 - Be specific to this article's proposed changes. No generic filler.

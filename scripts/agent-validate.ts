@@ -1084,6 +1084,33 @@ console.log("\n— the planner is told what it may require —");
   );
 }
 
+console.log("\n— the QA planner is shown the plan it must verify —");
+{
+  const { buildQaPlanContextBlock } = await import("../src/lib/plan-constraints.ts");
+
+  const withPlan = buildQaPlanContextBlock("### שלב 1 — add geoAnalyzer.ts\nwrite the scorer");
+  check(
+    "the implementation plan reaches the QA planner",
+    withPlan.includes("geoAnalyzer.ts"),
+  );
+  check(
+    "criteria are confined to what the plan contains",
+    withPlan.includes("Do not write criteria for work the plan does not contain"),
+  );
+  check(
+    "a criterion nothing addresses is named as the wrong kind of failure",
+    withPlan.includes("rather than of the criterion"),
+  );
+  check(
+    "criteria are tagged with their step, because steps are reviewed one at a time",
+    withPlan.includes("(שלב N)"),
+  );
+  check(
+    "no plan means no block, so the older caller is unchanged",
+    buildQaPlanContextBlock() === "" && buildQaPlanContextBlock("   ") === "",
+  );
+}
+
 console.log("\n— checks are attributed to an attempt —");
 {
   const [attemptRun] = db

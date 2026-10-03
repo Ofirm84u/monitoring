@@ -47,14 +47,18 @@ export async function fillArticlePlans({
         ])
       : [[], []];
 
-    const [implPlan, qaPlan] = await Promise.all([
-      planArticleImplementation(project, article, codeContext, {
-        deniedPaths: DENIED_PATHS,
-        manifests,
-        files,
-      }),
-      planArticleQA(project, article),
-    ]);
+    // Sequential, not parallel, and that ordering is the whole point: acceptance
+    // criteria have to describe the plan that will actually be carried out. Run
+    // side by side from the same article, the two planners agreed only by
+    // coincidence — and stopped agreeing the moment the implementation planner
+    // started seeing the repository's real constraints. The extra latency costs
+    // nothing now that planning happens off the request path.
+    const implPlan = await planArticleImplementation(project, article, codeContext, {
+      deniedPaths: DENIED_PATHS,
+      manifests,
+      files,
+    });
+    const qaPlan = await planArticleQA(project, article, implPlan.text);
 
     await setRunPlans(runId, {
       implementationPlan: implPlan.text,

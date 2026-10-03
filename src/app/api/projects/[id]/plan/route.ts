@@ -95,10 +95,10 @@ export async function POST(request: Request, { params }: RouteContext) {
   let qaPlan: Awaited<ReturnType<typeof planArticleQA>>;
 
   try {
-    [implPlan, qaPlan] = await Promise.all([
-      planArticleImplementation(project, article, codeContext),
-      planArticleQA(project, article),
-    ]);
+    // Sequential so the QA plan verifies the implementation plan rather than its
+    // own independent reading of the article. See buildQaPlanContextBlock.
+    implPlan = await planArticleImplementation(project, article, codeContext);
+    qaPlan = await planArticleQA(project, article, implPlan.text);
   } catch (err) {
     return json(502, {
       error: err instanceof Error ? err.message : "Plan generation failed",
