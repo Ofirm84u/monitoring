@@ -161,7 +161,11 @@ export async function planArticleImplementation(
    * runner had been spent finding out. The planner was not being careless; it had
    * no way to know either fact.
    */
-  constraints?: { deniedPaths: readonly string[]; manifests: RepoManifest[] },
+  constraints?: {
+    deniedPaths: readonly string[];
+    manifests: RepoManifest[];
+    files?: string[];
+  },
 ): Promise<ArticlePlan> {
   const codeBlock = codeContext
     ? `\nPROJECT CODE (excerpt — cite exact functions/lines if present, never invent):\n${codeContext}\n`

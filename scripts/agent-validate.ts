@@ -1045,6 +1045,31 @@ console.log("\n— the planner is told what it may require —");
     withManifests.includes("8 files") && withManifests.includes("400 changed lines"),
   );
 
+  const withTree = buildPlanConstraintsBlock({
+    deniedPaths: ["alembic/**"],
+    manifests: [{ path: "requirements.txt", text: "celery==5.4.0" }],
+    files: ["apps/api/tasks.py", "apps/api/db.py", "apps/web/src/app/page.tsx"],
+  });
+  check(
+    "the planner sees the real file listing",
+    withTree.includes("apps/api/tasks.py"),
+  );
+  check(
+    "and is told an unseen directory does not exist",
+    withTree.includes("Do not invent a location"),
+  );
+  check(
+    "a new file is allowed if it is declared as new",
+    withTree.includes("be a new file you explicitly say is new"),
+  );
+  check(
+    "no listing means no listing block, rather than an empty one",
+    !buildPlanConstraintsBlock({
+      deniedPaths: ["alembic/**"],
+      manifests: [],
+    }).includes("REPOSITORY FILES"),
+  );
+
   const noManifests = buildPlanConstraintsBlock({
     deniedPaths: ["requirements.txt"],
     manifests: [],

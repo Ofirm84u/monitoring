@@ -16,8 +16,20 @@ import type { RepoManifest } from "./repo-manifests";
 export function buildPlanConstraintsBlock(constraints?: {
   deniedPaths: readonly string[];
   manifests: RepoManifest[];
+  /** The repository's source paths. Empty when they could not be read. */
+  files?: string[];
 }): string {
   if (!constraints) return "";
+
+  // Knowing the packages stopped it inventing dependencies; knowing the files is
+  // what stops it inventing locations. The previous plan proposed a `tasks/`
+  // package for a repo whose task code is one file called `tasks.py`, and
+  // imported a module that does not exist.
+  const files = constraints.files ?? [];
+  const treeBlock =
+    files.length > 0
+      ? `\nREPOSITORY FILES — the complete source listing. Every path you name must either appear here or be a new file you explicitly say is new:\n${files.join("\n")}\n`
+      : "";
 
   const manifests =
     constraints.manifests.length > 0
@@ -26,7 +38,7 @@ export function buildPlanConstraintsBlock(constraints?: {
           .join("\n")}\n`
       : `\nDEPENDENCY MANIFESTS: could not be read. Do not assume any package is available beyond what the stack implies, and prefer naming a prerequisite over guessing.\n`;
 
-  return `${manifests}
+  return `${manifests}${treeBlock}
 WHAT THE IMPLEMENTER CANNOT DO. These are enforced as a gate rather than requested in a prompt, so a plan that requires one of them cannot be carried out at all:
 - It cannot edit any of these paths: ${constraints.deniedPaths.join(", ")}
 - So it cannot add a dependency, write a database migration, change CI, or touch Docker or env files.
@@ -37,5 +49,6 @@ Therefore:
 - A step needing a new table or column needs a migration, which is a denied path. Say so inside the step instead of proposing the model class alone: code for a table nothing creates passes every test and then fails on deploy.
 - Never leave a placeholder in code you propose — no "yourdomain", no "TODO", no "your-api-key". If a value must be configured, name the environment variable and say that it is new.
 - Keep the plan internally consistent: a file path or symbol named in one step must be the same one the QA criteria will exercise.
+- Do not invent a location. A directory you have not seen in the listing does not exist, and neither does a module you have not seen — if a symbol you need lives somewhere, name the file from the listing that defines it rather than assuming a conventional path.
 `;
 }
