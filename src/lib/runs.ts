@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import {
   agentChecks,
@@ -306,6 +306,31 @@ export type DecisionRedemption =
  * racing each other resolve in the database rather than in application code —
  * the loser gets `already_used` instead of a second merge.
  */
+/**
+ * The decision a step is currently waiting on, if any.
+ *
+ * Unspent and unexpired, newest first. Needed because delivering a decision to
+ * Telegram is best-effort by design — a send failure must never fail the gate
+ * callback that produced the verdict — which means something has to be able to
+ * try again. Without this, a Telegram outage silently costs that step its
+ * notification for good.
+ */
+export async function findPendingDecision(stepId: string) {
+  const [decision] = await db
+    .select()
+    .from(agentDecisions)
+    .where(
+      and(
+        eq(agentDecisions.stepId, stepId),
+        isNull(agentDecisions.usedAt),
+        gt(agentDecisions.expiresAt, new Date()),
+      ),
+    )
+    .orderBy(desc(agentDecisions.createdAt))
+    .limit(1);
+  return decision ?? null;
+}
+
 export async function redeemDecision(
   token: string,
   action: string,
