@@ -15,7 +15,7 @@ Everything below is done by you. The commands are exact; nothing is a sketch.
 | Sandbox repo | `Ofirm84u/seoapp` — private |
 | Server | `ofir@34.165.51.161`, key `~/.ssh/gcp_vm` |
 | App path | `/home/ofir/monitor`, pm2 process `monitor` |
-| Branch | `feat/idea-runner` (local only until step 2) |
+| Branch | `main` |
 
 Two things that will bite if you skip them:
 
@@ -48,7 +48,7 @@ echo "$AGENT_SECRET"
 
 ```bash
 cd /Volumes/CODEAI/MonitoringApp
-git push -u origin feat/idea-runner
+git push origin main
 ```
 
 Don't merge to `main` yet — this branch also carries unpushed pm-hub work.
@@ -90,7 +90,7 @@ ls -la app.db.backup-*
 awk -F= '/^AGENT_SECRET=/{print "server length: " length($2)}' .env.production
 
 git fetch origin
-git checkout feat/idea-runner
+git checkout main
 git pull
 npm ci --legacy-peer-deps
 SQLITE_PATH=/home/ofir/monitor/app.db npx drizzle-kit migrate
@@ -168,9 +168,6 @@ mkdir -p .github/workflows
 cp /Volumes/CODEAI/MonitoringApp/docs/idea-agent-caller.yml \
    .github/workflows/idea-agent.yml
 
-# Point at the branch until it merges to main
-sed -i '' 's|idea-agent.yml@main|idea-agent.yml@feat/idea-runner|' \
-   .github/workflows/idea-agent.yml
 ```
 
 Now edit `.github/workflows/deploy.yml` and add `.github/**` under
@@ -310,7 +307,7 @@ card replaces in Phase 4.
 | `409 unmeasured_baseline` | Working as designed — dry run first |
 | `ok:true` but no workflow run | Caller isn't on seoapp's **default** branch |
 | Packet fetch returns 401 | `AGENT_SECRET` differs between server and repo secret |
-| `workflow was not found` | `@feat/idea-runner` not pushed, or the ref in the caller is wrong |
+| `workflow was not found` | the ref in the caller does not exist on the monitoring repo |
 | `409 locked` | A step is already running on that repo; it holds the lock until it settles |
 | `startup_failure` in 0s, no logs | A workflow-file issue, usually input types. `client_payload` values arrive as strings, and `dry_run` is declared `boolean` — the caller must wrap it in `fromJSON()` |
 | G0 fails during install | Python version — the runner takes it from the packet, and seoapp needs 3.12 |

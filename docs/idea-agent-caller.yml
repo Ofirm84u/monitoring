@@ -26,8 +26,9 @@ on:
 
 jobs:
   agent:
-    # While testing, point this at the branch the workflow lives on
-    # (…/idea-agent.yml@feat/idea-runner) until it has merged to main.
+    # Pinned to main. Point it at a branch only while changing the ladder
+    # itself, and remember that repository_dispatch resolves this ref at fire
+    # time — a branch that is deleted takes every target repo's agent with it.
     uses: Ofirm84u/monitoring/.github/workflows/idea-agent.yml@main
     with:
       run_id: ${{ github.event.client_payload.runId }}
