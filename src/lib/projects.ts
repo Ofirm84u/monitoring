@@ -203,6 +203,20 @@ export const PROJECTS: ProjectConfig[] = [
     runtime: "none",
   },
   {
+    id: "sheelot",
+    name: "Sheelot",
+    description: "Question game at game.la-zug.co.il",
+    stack: ["Docker"],
+    // No `repo`: the image is built outside this account and pulled from
+    // Artifact Registry (me-west1-docker.pkg.dev/sheelot-lishnayim/web), so
+    // there is nothing here for the Idea Runner to open a pull request against.
+    // It is listed to be watched, not to be worked on — it was publicly served
+    // and backed up nightly while being the one site the dashboard never checked.
+    url: "https://game.la-zug.co.il",
+    runtime: "docker",
+    dockerPrefix: "sheelot",
+  },
+  {
     id: "cms-manager",
     name: "CMS Manager",
     description: "Reusable page builder CMS for Next.js",
