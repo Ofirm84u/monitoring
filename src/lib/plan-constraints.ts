@@ -69,10 +69,27 @@ Therefore:
  * project. Acceptance criteria have to describe the plan that will actually be
  * carried out, so the QA planner is given it.
  */
-export function buildQaPlanContextBlock(implementationPlan?: string | null): string {
+export function buildQaPlanContextBlock(
+  implementationPlan?: string | null,
+  /**
+   * The same manifests the implementation planner gets. A QA plan is mostly
+   * commands, and a command needs the project's real tooling: the first plan
+   * written against an accurate implementation told the reviewer to run
+   * `npx jest audit-helpers.test.ts` for a workspace that uses vitest. The
+   * package manifest carries both the runner and the script names.
+   */
+  manifests: RepoManifest[] = [],
+): string {
   if (!implementationPlan?.trim()) return "";
 
-  return `
+  const toolingBlock =
+    manifests.length > 0
+      ? `\nPROJECT MANIFESTS — the real tooling. Every command you write must come from here:\n${manifests
+          .map((m) => `--- ${m.path} ---\n${m.text}`)
+          .join("\n")}\n`
+      : "";
+
+  return `${toolingBlock}
 THE IMPLEMENTATION PLAN YOU ARE WRITING CRITERIA FOR. This is the change that will actually be made — not a suggestion, and not something to improve upon:
 
 ${implementationPlan.trim()}
@@ -82,5 +99,6 @@ Therefore:
 - Do not write criteria for work the plan does not contain. A criterion nothing in the plan addresses cannot be met, and reports as a failure of the change rather than of the criterion.
 - Tag each criterion with the step it belongs to, as "(שלב N)". The steps are reviewed one at a time, and a criterion that belongs to a later step must be recognisable as such.
 - Prefer criteria a reviewer can settle by reading the diff. Where a check genuinely requires running the code, say so explicitly in the criterion.
+- Every command must be one this project can actually run. Take the test runner and the script names from the manifests above — not from what is conventional for the stack — and prefer an existing npm or make script over a bare invocation.
 `;
 }

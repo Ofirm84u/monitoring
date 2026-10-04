@@ -278,6 +278,8 @@ export async function planArticleQA(
    * work and every criterion reports as unmet.
    */
   implementationPlan?: string | null,
+  /** The project's manifests, so the commands it writes are runnable here. */
+  manifests: RepoManifest[] = [],
 ): Promise<ArticlePlan> {
   const lang = codeLanguage(project.stack);
   const keyIdeas = article.summary?.keyIdeas.map((k) => `  - ${k}`).join("\n") ?? "";
@@ -289,7 +291,7 @@ export async function planArticleQA(
 
 PROJECT: ${project.name}
 STACK: ${project.stack.join(", ")}
-${buildQaPlanContextBlock(implementationPlan)}
+${buildQaPlanContextBlock(implementationPlan, manifests)}
 RULES:
 - Respond in HEBREW. Use English for code identifiers, test names, CLI commands.
 - Be specific to this article's proposed changes. No generic filler.

@@ -1109,6 +1109,26 @@ console.log("\n— the QA planner is shown the plan it must verify —");
     "no plan means no block, so the older caller is unchanged",
     buildQaPlanContextBlock() === "" && buildQaPlanContextBlock("   ") === "",
   );
+
+  // The first QA plan written against an accurate implementation told the
+  // reviewer to run jest in a vitest workspace. Commands have to come from the
+  // project, not from what is conventional for the stack.
+  const withTooling = buildQaPlanContextBlock("### שלב 1 — edit audit-helpers.ts", [
+    { path: "apps/web/package.json", text: '{"scripts":{"test":"vitest run"},"devDependencies":{"vitest":"2.1.8"}}' },
+  ]);
+  check("the QA planner sees the real test runner", withTooling.includes("vitest"));
+  check(
+    "and is told not to use what is merely conventional",
+    withTooling.includes("not from what is conventional for the stack"),
+  );
+  check(
+    "an existing script is preferred over a bare invocation",
+    withTooling.includes("prefer an existing npm or make script"),
+  );
+  check(
+    "no manifests means no tooling block rather than an empty one",
+    !buildQaPlanContextBlock("### שלב 1 — x").includes("PROJECT MANIFESTS"),
+  );
 }
 
 console.log("\n— checks are attributed to an attempt —");

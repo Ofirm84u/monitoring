@@ -58,7 +58,7 @@ export async function fillArticlePlans({
       manifests,
       files,
     });
-    const qaPlan = await planArticleQA(project, article, implPlan.text);
+    const qaPlan = await planArticleQA(project, article, implPlan.text, manifests);
 
     await setRunPlans(runId, {
       implementationPlan: implPlan.text,
