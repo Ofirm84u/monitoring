@@ -198,6 +198,26 @@ def api_activate(article_id: str) -> dict:
     return resp.json()
 
 
+def api_agent_decision(token: str, action: str, answer: Optional[str] = None) -> dict:
+    """Spend a decision token.
+
+    The token arrives in the button's callback_data rather than being looked up
+    here, which is what keeps the server's rule intact: only an unspent token can
+    land or reject a pull request. The bot is a courier, not an authority.
+    """
+    payload: dict = {"token": token, "action": action}
+    if answer is not None:
+        payload["answer"] = answer
+    resp = requests.post(
+        f"{API_URL}/api/agent/decision",
+        headers=_api_headers(),
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def api_list_articles() -> list[dict]:
     resp = requests.get(
         f"{API_URL}/api/articles",
@@ -415,6 +435,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not raw:
         return
 
+    # An answer to the agent's question takes precedence over article capture:
+    # the user was explicitly asked for this text, so treating it as an idea to
+    # summarise would both lose the answer and create a spurious article.
+    pending = context.user_data.pop("awaiting_answer_token", None)
+    if pending:
+        try:
+            result = api_agent_decision(pending, "answer", raw)
+        except requests.HTTPError as exc:
+            try:
+                err = exc.response.json().get("error", str(exc))
+            except Exception:
+                err = str(exc)
+            await msg.reply_text(f"⚠️ {err}")
+            return
+        except Exception as exc:
+            await msg.reply_text(f"❌ {exc}")
+            return
+        step = result.get("step", {})
+        await msg.reply_text(
+            f"✅ Answer recorded. Step is queued again at attempt {step.get('attempt', '?')}.\n"
+            f"{result.get('next', '')}"
+        )
+        return
+
     url_match = _URL_RE.search(raw)
     await msg.reply_text("📥 Processing...")
 
@@ -500,6 +544,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if len(parts) < 2:
         return
     action = parts[0]
+
+    if action == "agent" and len(parts) == 3:
+        agent_action, token = parts[1], parts[2]
+        if agent_action not in ("merge", "reject", "answer"):
+            return
+
+        if agent_action == "answer":
+            # Park the token and let the next text message be the answer. Stored
+            # per user rather than globally: bot_data is shared, and an answer
+            # going to the wrong step would be worse than no answer at all.
+            context.user_data["awaiting_answer_token"] = token
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                "✍️ Send your answer as the next message. It goes into the step's "
+                "next attempt, and the implementer is told not to re-ask it."
+            )
+            return
+
+        try:
+            result = api_agent_decision(token, agent_action)
+        except requests.HTTPError as exc:
+            try:
+                err = exc.response.json().get("error", str(exc))
+            except Exception:
+                err = str(exc)
+            # "Decision already used" is the expected answer to a double tap, so
+            # it is reported as a fact rather than a failure.
+            await query.message.reply_text(f"⚠️ {err}")
+            return
+        except Exception as exc:
+            await query.message.reply_text(f"❌ {exc}")
+            return
+
+        pr = result.get("prNumber")
+        verb = "merged" if agent_action == "merge" else "rejected"
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            f"{'✅' if agent_action == 'merge' else '❌'} PR #{pr} {verb}."
+            + ("" if agent_action == "merge" else " Branch deleted, repo unlocked.")
+        )
+        return
 
     if action == "assign" and len(parts) == 3:
         article_id, target = parts[1], parts[2]

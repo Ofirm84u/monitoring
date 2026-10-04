@@ -1084,6 +1084,60 @@ console.log("\n— the planner is told what it may require —");
   );
 }
 
+console.log("\n— the Telegram decision card —");
+{
+  const { buildCardText, buildKeyboard } = await import("../src/lib/telegram.ts");
+  const token = "OJSiNxNKvCESxSkxV6YFWtiH1gTlLwYX"; // 32 chars, as createDecision makes
+
+  const approve = {
+    token,
+    kind: "approve" as const,
+    prompt: "All gates passed.",
+    projectId: "seoapp",
+    repo: "seoapp",
+    prNumber: 14,
+  };
+  const text = buildCardText(approve);
+  check("the card links the pull request", text.includes("/seoapp/pull/14"));
+  check("and names the project in its header", text.includes("seoapp"));
+  check("the gate summary is the body", text.includes("All gates passed."));
+
+  const kb = buildKeyboard(approve);
+  check(
+    "an approval offers merge and reject",
+    !!kb && kb.inline_keyboard[0]!.length === 2,
+  );
+  check(
+    "the token travels in the button, not a decision id",
+    JSON.stringify(kb).includes(token),
+  );
+  check(
+    "callback_data stays inside Telegram's 64-byte limit",
+    JSON.stringify(kb).includes(`agent:merge:${token}`) &&
+      Buffer.byteLength(`agent:merge:${token}`) <= 64,
+  );
+
+  const question = buildKeyboard({ ...approve, kind: "question", prNumber: null });
+  check(
+    "a question offers an answer rather than a merge",
+    !!question && !JSON.stringify(question).includes("agent:merge"),
+  );
+  check(
+    "a parked step's card carries no pull request link",
+    !buildCardText({ ...approve, kind: "question", prNumber: null }).includes("/pull/"),
+  );
+
+  // Telegram rejects a body over 4096 characters outright, so an over-long
+  // review must truncate rather than lose the notification.
+  const huge = buildCardText({ ...approve, prompt: "x".repeat(9000) });
+  check("an over-long review is truncated, not dropped", huge.length <= 4096);
+  check("and the link survives the truncation", huge.includes("/seoapp/pull/14"));
+  check(
+    "a token too long for callback_data yields no buttons rather than broken ones",
+    buildKeyboard({ ...approve, token: "y".repeat(80) }) === null,
+  );
+}
+
 console.log("\n— the QA planner is shown the plan it must verify —");
 {
   const { buildQaPlanContextBlock } = await import("../src/lib/plan-constraints.ts");

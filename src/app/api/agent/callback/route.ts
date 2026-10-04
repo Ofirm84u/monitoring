@@ -20,6 +20,7 @@ import { GATES, type CheckStatus, type Gate } from "@/db/schema";
 import { evaluateReproduction, evaluateSmoke, isReadyForDecision } from "@/lib/gates";
 import { PROJECTS } from "@/lib/projects";
 import { requiredReproductionGate } from "@/lib/reproduction";
+import { sendDecisionCard } from "@/lib/telegram";
 
 /**
  * Where the workflow reports back.
@@ -232,16 +233,28 @@ export async function POST(request: Request) {
       if (run.status !== "running") {
         await setRunStatus(run.id, "running");
       }
+      const prNumber =
+        step.prNumber ?? (typeof body.prNumber === "number" ? body.prNumber : null);
       const decision = await createDecision({
         stepId: step.id,
         kind: "approve",
-        prompt: decisionPrompt(
-          step.title,
-          step.prNumber ?? (typeof body.prNumber === "number" ? body.prNumber : null),
-          await listChecks(step.id, step.attempt),
-        ),
+        prompt: decisionPrompt(step.title, prNumber, await listChecks(step.id, step.attempt)),
       });
-      return json(200, { ok: true, decisionId: decision.id });
+
+      // Best-effort, and awaited only so the result can be reported. A Telegram
+      // failure must not fail this callback: the gates have already run and the
+      // decision is already recorded, so the worst case is falling back to the
+      // database lookup this card exists to replace.
+      const delivery = await sendDecisionCard({
+        token: decision.token,
+        kind: "approve",
+        prompt: decision.prompt,
+        projectId: run.projectId,
+        repo: project?.repo ?? null,
+        prNumber,
+      });
+
+      return json(200, { ok: true, decisionId: decision.id, telegram: delivery });
     }
 
     case "question": {
@@ -256,7 +269,19 @@ export async function POST(request: Request) {
         kind: "question",
         prompt: question,
       });
-      return json(200, { ok: true, decisionId: decision.id });
+
+      const asked = await sendDecisionCard({
+        token: decision.token,
+        kind: "question",
+        prompt: question,
+        projectId: run.projectId,
+        repo: PROJECTS.find((p) => p.id === run.projectId)?.repo ?? null,
+        // A parked step has no pull request: it is parked precisely because
+        // nothing was pushed.
+        prNumber: null,
+      });
+
+      return json(200, { ok: true, decisionId: decision.id, telegram: asked });
     }
 
     case "failed": {
