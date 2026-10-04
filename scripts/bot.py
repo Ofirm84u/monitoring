@@ -89,6 +89,13 @@ MAX_DOC_BYTES = 20 * 1024 * 1024
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO
 )
+# httpx logs every request URL at INFO, and a Telegram API URL embeds the bot
+# token: https://api.telegram.org/bot<TOKEN>/getUpdates. With getUpdates polling
+# every ten seconds that wrote the token to logs/bot-error.log over a million
+# times — 225MB of world-readable plaintext secret, and real errors buried in it.
+# WARNING keeps genuine transport failures without the URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 if not ALLOWED_USER_ID:
