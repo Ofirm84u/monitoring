@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticatedOrBot } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { listRuns, listSteps } from "@/lib/runs";
 
 /**
@@ -19,6 +20,9 @@ import { listRuns, listSteps } from "@/lib/runs";
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
+// A listing, so generous — but not unbounded.
+const RATE_LIMIT = { maxAttempts: 60, windowMs: 60 * 1000 };
+
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
     status,
@@ -29,6 +33,10 @@ function json(status: number, body: unknown) {
 export async function GET(request: Request) {
   if (!(await isAuthenticatedOrBot(request))) {
     return json(401, { error: "Unauthorized" });
+  }
+  const ip = getClientIp(request);
+  if (!checkRateLimit(`agent-runs:${ip}`, RATE_LIMIT).allowed) {
+    return json(429, { error: "Rate limit exceeded" });
   }
 
   const { searchParams } = new URL(request.url);

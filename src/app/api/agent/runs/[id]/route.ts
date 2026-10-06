@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticatedOrBot } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { getRun, listChecks, listSteps } from "@/lib/runs";
 
 /**
@@ -10,6 +11,9 @@ import { getRun, listChecks, listSteps } from "@/lib/runs";
  * it is where you read whether planning finished — `status: "planning"` with no
  * steps means it is still working, `"failed"` carries the reason in `error`.
  */
+
+// A listing, so generous — but not unbounded.
+const RATE_LIMIT = { maxAttempts: 60, windowMs: 60 * 1000 };
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
@@ -25,6 +29,10 @@ interface RouteContext {
 export async function GET(request: Request, { params }: RouteContext) {
   if (!(await isAuthenticatedOrBot(request))) {
     return json(401, { error: "Unauthorized" });
+  }
+  const ip = getClientIp(request);
+  if (!checkRateLimit(`agent-run:${ip}`, RATE_LIMIT).allowed) {
+    return json(429, { error: "Rate limit exceeded" });
   }
 
   const { id } = await params;

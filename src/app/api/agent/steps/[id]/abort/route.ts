@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticatedOrBot } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import {
   getProjectLock,
   getRun,
@@ -26,6 +27,9 @@ import {
  * results for work nobody is waiting on.
  */
 
+// Mutates a step and frees a repo lock.
+const RATE_LIMIT = { maxAttempts: 20, windowMs: 60 * 1000 };
+
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
     status,
@@ -40,6 +44,10 @@ interface RouteContext {
 export async function POST(request: Request, { params }: RouteContext) {
   if (!(await isAuthenticatedOrBot(request))) {
     return json(401, { error: "Unauthorized" });
+  }
+  const ip = getClientIp(request);
+  if (!checkRateLimit(`agent-abort:${ip}`, RATE_LIMIT).allowed) {
+    return json(429, { error: "Rate limit exceeded" });
   }
 
   const { id } = await params;
