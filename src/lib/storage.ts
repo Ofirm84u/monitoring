@@ -238,11 +238,14 @@ const CLEANUP_ACTIONS: Record<string, { label: string; command: string; timeoutM
     command: "docker image prune -f",
     timeoutMs: 60_000,
   },
-  "docker-full": {
-    label: "Full Docker cleanup (images + volumes)",
-    command: "docker system prune -af --volumes",
-    timeoutMs: 60_000,
-  },
+  // Deliberately no "full cleanup" action. `docker system prune -af --volumes`
+  // behind an HTTP endpoint is a single unconfirmed request that deletes every
+  // unused image and every unattached network — and Caddy reaches the app
+  // containers over those networks. Its volume behaviour is also version
+  // dependent: --volumes is anonymous-only on Docker 23+, but took named
+  // volumes before that, so the blast radius changes silently on upgrade.
+  // The build-cache and dangling-image actions above cover what the dashboard
+  // actually needs. Removed 2026-10-10.
   "old-archives": {
     label: "Delete old archive files",
     command:
