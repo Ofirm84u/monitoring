@@ -19,6 +19,7 @@ The VM is `first-1appseo` in GCP project `ofirs-381811`, zone `me-west1-c`
 | `crm-gmail-check.sh` | `/home/ofir/monitoring/crm-gmail-check.sh` |
 | `env-backup.sh` | `/home/ofir/scripts/env-backup.sh` |
 | `caddy-health-check.sh` | `/home/ofir/scripts/caddy-health-check.sh` |
+| `deploy-drift-check.sh` | `/home/ofir/scripts/deploy-drift-check.sh` |
 
 Note the two directories are different and both are in use: the Next.js app
 lives in `/home/ofir/monitor`, while the cron scripts, their logs and state
@@ -49,6 +50,10 @@ Add to `crontab -e` on the VM:
 */15 * * * * /home/ofir/monitoring/crm-gmail-check.sh >> /home/ofir/monitoring/crm-gmail-check.log 2>&1
 # Backup-freshness check + Telegram alert (10:00 UTC = 13:00 Israel)
 0 10 * * * /home/ofir/scripts/backup-freshness-check.sh >> /home/ofir/scripts/freshness.log 2>&1
+# Daily deploy-drift check — is what is running the same as origin/main? (11:00 UTC)
+# Added 2026-10-27, after bizitis served 1.4.1 for four days while GitHub main
+# was 1.4.0 and the VM's own clone said 1.3.0, with nobody noticing.
+0 11 * * * /home/ofir/scripts/deploy-drift-check.sh >> /home/ofir/scripts/drift.log 2>&1
 
 # --- Disk hygiene ---
 # Changed 2026-06-03: weekly wasn't enough - bizitis backup tags accumulate
@@ -109,3 +114,14 @@ their own apps: `/opt/kosher/scripts/pg-backup.sh`,
   dashboard that normally raises alerts is itself one of them. It keeps its own
   cooldown in `/tmp/caddy-health-last-alert` and clears it on recovery, so a
   second outage alerts immediately rather than waiting out the window.
+
+- `deploy-drift-check.sh` compares, per app, what is actually running against
+  `origin/main`. It prefers the image tag when that tag is a git SHA, falls back
+  to the `version` in `package.json` read out of the running container, and
+  reports `UNKNOWN` when it can do neither — which is itself the finding, since
+  only `crm-mati` and `sheelot` tag images with a SHA. It alerts on `DRIFT` only;
+  `UNKNOWN` is logged but never paged, because it is a standing gap and daily
+  paging about it would be the same alert fatigue that hid a dead backup for 19
+  days. It only ever runs `git fetch`, never `pull` or `checkout`: the clone at
+  `/home/ofir/bizitis` is 37 commits behind with `build: context: .`, so pulling
+  there would build an old version over a live site.
