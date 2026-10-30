@@ -9,6 +9,7 @@ MONITOR_DIR="/home/ofir/monitoring"
 STATUS_FILE="$MONITOR_DIR/status.json"
 ALERT_STATE_FILE="$MONITOR_DIR/alert-state"   # one "<key> <epoch>" line per distinct issue
 LOG_FILE="$MONITOR_DIR/monitor.log"
+EVENT_LOG="$MONITOR_DIR/events.log"   # incidents only, never trimmed
 ALERT_COOLDOWN_SECONDS=1800  # 30 minutes between duplicate alerts
 ALERT_EMAIL="ofir@bizitis.co.il"
 
@@ -94,6 +95,19 @@ mkdir -p "$MONITOR_DIR"
 # ── Helper: log message ──────────────────────────────────
 log() {
   echo "[$NOW] $1" >> "$LOG_FILE"
+
+  # Incidents are also appended to EVENT_LOG, which is never trimmed.
+  # monitor.log takes a line every 2 minutes and is trimmed to a fixed number of
+  # lines, so it only ever holds the recent past. At the old 500-line cap that
+  # was about 16 hours, and it silently ate the entire record of a real prdaily
+  # outage on 2026-10-16 - by the time anyone looked, the log began after the
+  # incident. Incidents are rare (single digits per week), so keeping them
+  # indefinitely costs almost nothing and is the difference between diagnosing
+  # a repeat and guessing at it.
+  case "$1" in
+    FAIL*|RECOVERY*|ALERT*|NOTE*|SUPPRESSED*)
+      echo "[$NOW] $1" >> "$EVENT_LOG" ;;
+  esac
 }
 
 # ── Helper: per-issue alert cooldown ─────────────────────
@@ -390,7 +404,10 @@ if [[ -f "$ALERT_STATE_FILE" ]]; then
   mv "${ALERT_STATE_FILE}.keep" "$ALERT_STATE_FILE"
 fi
 
-# ── Trim log file (keep last 500 lines) ─────────────────
-if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 500 ]]; then
-  tail -500 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+# ── Trim log file (keep last 5000 lines ~= 7 days) ──────
+# 500 lines was ~16 hours at a 2-minute cadence, which is shorter than the gap
+# between noticing a problem and investigating it. 5000 lines is still only a
+# couple of hundred KB. Incidents outlive this file either way, in EVENT_LOG.
+if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 5000 ]]; then
+  tail -5000 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
 fi
