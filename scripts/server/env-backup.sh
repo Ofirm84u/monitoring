@@ -15,7 +15,6 @@ trap 'rm -rf "$BACKUP_DIR" "$OUTFILE"' EXIT
 # source path : name inside the archive
 ENV_FILES=(
   "/opt/crm-mati/.env:crm-mati.env"
-  "/opt/beiteden/.env:beiteden.env"
   "/home/ofir/seoapp/.env:seoapp.env"
   "/home/ofir/bizitis/.env:bizitis.env"
   "/opt/prdaily/.env:prdaily.env"

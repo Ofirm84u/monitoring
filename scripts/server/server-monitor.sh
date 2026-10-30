@@ -29,7 +29,6 @@ LOAD_WARN=3.0         # Alert if 5-min load average above this
 declare -A SITES=(
   ["bizitis"]="https://bizitis.co.il"
   ["seoapp"]="https://app.m84.me"
-  ["beiteden"]="https://beiteden.m84.me"
   ["mati"]="https://mati.m84.me"
   ["prdaily"]="https://pr.m84.me"
   ["sheelot"]="https://game.la-zug.co.il"
@@ -60,9 +59,6 @@ REQUIRED_CONTAINERS=(
   "seoapp-api-1"
   "seoapp-db-1"
   "seoapp-redis-1"
-  "beiteden-app"
-  "beiteden-postgres"
-  "beiteden-redis"
   "crm-mati-app"
   "crm-mati-postgres"
   "prdaily-app"

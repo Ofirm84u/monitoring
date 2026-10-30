@@ -27,7 +27,6 @@ APPS=(
   "bizitis|bizitis-app-1|/home/ofir/bizitis|node"
   "crm-mati|crm-mati-app|/opt/crm-mati|node"
   "bookme|bookme-app|/opt/bookme|node"
-  "beiteden|beiteden-app|/opt/beiteden|node"
   "kosher|kosher-app|/opt/kosher|node"
   "seoapp|seoapp-web-1|/home/ofir/seoapp|node"
   "prdaily|prdaily-app|/opt/prdaily|other"
