@@ -48,6 +48,14 @@ for entry in "${APPS[@]}"; do
   # What is running.
   if [[ "$kind" == "pm2" ]]; then
     [[ -r "$clone/package.json" ]] && run_ver=$(pkg_version < "$clone/package.json")
+    # For a clone-based deploy the tree IS what is running, so HEAD is the
+    # authoritative answer and the version string is worthless: the monitoring
+    # repo has sat at "version": "1.0.0" for its whole life, so comparing
+    # versions reported MATCH while /home/ofir/monitor was 8 commits behind
+    # origin/main — a green light over a real gap, which is worse than no check.
+    # Feeding HEAD in as run_sha lets the SHA comparison below handle it.
+    run_sha=$(git -C "$clone" rev-parse --short HEAD 2>/dev/null || echo "-")
+    [[ -z "$run_sha" ]] && run_sha="-"
   elif [[ -n "$container" && "$container" != "-" ]]; then
     # Prefer the OCI revision label. It is written at build time and survives
     # retagging, whereas .Config.Image is only whatever the deploy happened to
