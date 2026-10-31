@@ -38,6 +38,7 @@ TARGETS=(
   "bookme|bookme/|bookme-|pg|postgres:17-alpine|bookme-postgres"
   "kosher|kosher/|kosher-|pg|postgres:18-alpine|kosher-postgres"
   "sheelot|sheelot/|sheelot-couple-|redis|redis:7-alpine|sheelot-couple-redis"
+  "pg-globals|pg-globals/|kosher-postgres-|globals|-|kosher-postgres"
   "env-files|env-files/|env-files-|tar|-|-"
   "prdaily-files|prdaily/files/|prdaily-files-|tar|-|-"
 )
@@ -82,6 +83,23 @@ drill_pg() {  # label image prod_container object
     || { echo "could not start $image"; return 1; }
   local i; for i in $(seq 1 30); do docker exec drill-pg pg_isready -U postgres -q 2>/dev/null && break; sleep 1; done
 
+  # Globals first, then the database — that is the real recovery order, and
+  # skipping it is why kosher failed: pg_dump does not create roles, so its 102
+  # RLS policies referencing cosher_app had nothing to attach to. Restoring the
+  # roles first is not a workaround for the drill; it is the procedure.
+  local globals
+  globals=$("$GSUTIL" ls "${BUCKET}/pg-globals/${prod}-*" 2>/dev/null | sort | tail -1)
+  if [[ -n "$globals" ]]; then
+    "$GSUTIL" cat "$globals" 2>/dev/null | zcat > "$WORK/${label}.globals.sql"
+    # ON_ERROR_STOP is deliberately off here: a globals dump re-creates the
+    # superuser the container already has, which errors harmlessly.
+    docker exec -i drill-pg psql -U postgres -d postgres --quiet \
+      < "$WORK/${label}.globals.sql" >/dev/null 2>&1
+    GLOBALS_NOTE=" (+globals: $(grep -c '^CREATE ROLE' "$WORK/${label}.globals.sql") roles)"
+  else
+    GLOBALS_NOTE=" (no globals backup found)"
+  fi
+
   # >/dev/null matters: this function's stdout becomes the log detail, and psql
   # echoes setval/set_config rows that otherwise drown the real message.
   if ! docker exec -i drill-pg psql -U postgres -d drill -v ON_ERROR_STOP=1 --quiet \
@@ -89,9 +107,13 @@ drill_pg() {  # label image prod_container object
     echo "psql failed: $(head -2 "$WORK/${label}.err" | tr '\n' ' ')"; return 1
   fi
 
+  # BASE TABLE only: information_schema.tables counts views too, and kosher has
+  # 11 of them, which made 35 declared tables look like 46 restored. The count
+  # also has to span every schema, not just public — bookme keeps
+  # __drizzle_migrations in a drizzle schema, which made 13 look like 12.
   local got_tables
   got_tables=$(docker exec drill-pg psql -U postgres -d drill -At \
-    -c "select count(*) from information_schema.tables where table_schema not in ('pg_catalog','information_schema')" 2>/dev/null)
+    -c "select count(*) from information_schema.tables where table_schema not in ('pg_catalog','information_schema') and table_type = 'BASE TABLE'" 2>/dev/null)
   [[ "$got_tables" == "$want_tables" ]] || { echo "restored $got_tables tables, dump declared $want_tables"; return 1; }
 
   # A dump can restore 38 empty tables and still be worthless. Compare the
@@ -107,9 +129,9 @@ drill_pg() {  # label image prod_container object
     pu=$(docker inspect "$prod" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^POSTGRES_USER=' | cut -d= -f2)
     pd=$(docker inspect "$prod" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^POSTGRES_DB=' | cut -d= -f2)
     rows_prod=$(docker exec "$prod" psql -U "$pu" -d "$pd" -At -c "select count(*) from \"$biggest\"" 2>/dev/null)
-    echo "${got_tables} tables; \"${biggest}\" restored=${rows_restored} prod=${rows_prod:-?}"
+    echo "${got_tables} tables; \"${biggest}\" restored=${rows_restored} prod=${rows_prod:-?}${GLOBALS_NOTE:-}"
   else
-    echo "${got_tables} tables; \"${biggest}\" restored=${rows_restored} (no production to compare)"
+    echo "${got_tables} tables; \"${biggest}\" restored=${rows_restored} (no production to compare)${GLOBALS_NOTE:-}"
   fi
   return 0
 }
@@ -143,6 +165,16 @@ drill_tar() {  # label object
   return 0
 }
 
+drill_globals() {  # label object — a globals dump with no roles is not a backup
+  local label="$1" obj="$2" f="$WORK/${label}.sql"
+  "$GSUTIL" cat "$obj" 2>/dev/null | zcat > "$f" || { echo "download/gunzip failed"; return 1; }
+  local roles; roles=$(grep -c '^CREATE ROLE' "$f")
+  (( roles > 0 )) || { echo "no CREATE ROLE statements"; return 1; }
+  grep -q 'PASSWORD' "$f" || echo -n ""   # hashes present is normal; never printed
+  echo "${roles} roles"
+  return 0
+}
+
 for entry in "${TARGETS[@]}"; do
   IFS='|' read -r label gcs obj_prefix kind image prod <<<"$entry"
   object=$(newest_object "$gcs" "$obj_prefix")
@@ -154,6 +186,7 @@ for entry in "${TARGETS[@]}"; do
     pg)    detail=$(drill_pg "$label" "$image" "$prod" "$object") ; rc=$? ;;
     redis) detail=$(drill_redis "$label" "$image" "$object")      ; rc=$? ;;
     tar)   detail=$(drill_tar "$label" "$object")                 ; rc=$? ;;
+    globals) detail=$(drill_globals "$label" "$object")            ; rc=$? ;;
     *)     detail="unknown kind"; rc=1 ;;
   esac
   if (( rc == 0 )); then

@@ -21,6 +21,7 @@ The VM is `first-1appseo` in GCP project `ofirs-381811`, zone `me-west1-c`
 | `caddy-health-check.sh` | `/home/ofir/scripts/caddy-health-check.sh` |
 | `deploy-drift-check.sh` | `/home/ofir/scripts/deploy-drift-check.sh` |
 | `restore-drill.sh` | `/home/ofir/scripts/restore-drill.sh` |
+| `pg-globals-backup.sh` | `/home/ofir/scripts/pg-globals-backup.sh` |
 
 Note the two directories are different and both are in use: the Next.js app
 lives in `/home/ofir/monitor`, while the cron scripts, their logs and state
@@ -57,6 +58,10 @@ Add to `crontab -e` on the VM:
 # Restore drill — runs daily, acts every 29 days (06:00 UTC)
 # 29 and not 30 deliberately: the bucket deletes at age 30, so a 30-day cycle
 # can drift past the window and test nothing.
+# Cluster roles, grants and memberships (02:45 UTC, before the DB dumps)
+# pg_dump does not capture roles — they are cluster-level. Without this, any
+# dump containing RLS policies or grants cannot be restored at all.
+45 2 * * * /home/ofir/scripts/pg-globals-backup.sh >> /home/ofir/scripts/pg-globals.log 2>&1
 0 6 * * * /home/ofir/scripts/restore-drill.sh >> /home/ofir/scripts/restore-drill.log 2>&1
 
 # --- Disk hygiene ---
@@ -155,3 +160,11 @@ Two things worth knowing if another app is ever decommissioned:
   stopping anything.
 - **`restart: always` survives a manual stop** across a daemon restart or reboot.
   `docker update --restart=no` is what actually keeps it down.
+
+- `pg-globals-backup.sh` writes `pg_dumpall --globals-only` per cluster to
+  `gs://m84-backups/pg-globals/`, discovering the Postgres containers rather
+  than listing them, and skipping any that run a postgres image without
+  accepting connections (`kosher-jobs` does exactly that). **Its output
+  contains SCRAM password hashes**, so the local copies are `0600` inside a
+  `0700` directory and the script never echoes their contents — it counts
+  `CREATE ROLE` lines instead, and refuses to publish a dump containing none.

@@ -53,6 +53,12 @@ SOURCES=(
   # smallest, against ~28 keys. The 200B floor clears that whole range while
   # still catching an emptied or truncated dump, which gzips to tens of bytes.
   "Sheelot|gs://m84-backups/sheelot/|sheelot-couple-|/home/ofir/sheelot/logs/backup.log|200"
+  # Cluster roles, added 2026-10-31. These are tiny (~450-550B each) because
+  # they hold only CREATE ROLE and grants, hence the 200B floor. One entry
+  # covers the whole prefix, so this catches "the globals job stopped
+  # running"; a single cluster failing while others succeed is already
+  # alerted by pg-globals-backup.sh itself.
+  "pg-globals|gs://m84-backups/pg-globals/||/home/ofir/scripts/pg-globals.log|200"
 )
 
 # A stable key per app, for the state file.
