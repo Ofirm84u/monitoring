@@ -22,7 +22,7 @@ MAX_AGE_HOURS=26
 # more; a truncated dump or captured error output is a few hundred bytes. This is
 # a corruption guard, not a data-volume check — never raise it towards the
 # current size of a backup, or a healthy one starts crying wolf.
-MIN_SIZE_BYTES=1024
+MIN_SIZE_BYTES=1024   # default floor; a source may override it as a 5th field
 
 # One "<key> <consecutive_days>" line per app still failing. Without it every
 # morning's message is identical, and an alert that repeats unchanged for days is
@@ -47,6 +47,12 @@ SOURCES=(
   "PR Daily DB|gs://m84-backups/prdaily/|prdaily-2|/opt/prdaily/backups/cron.log"
   "PR Daily files|gs://m84-backups/prdaily/files/|prdaily-files-|/opt/prdaily/backups/files-backup.log"
   "env-files|gs://m84-backups/env-files/||/home/ofir/monitoring/env-backup.log"
+  # Added 2026-10-31: Sheelot was in no SOURCES list, so a silent stop of its
+  # nightly backup would have alerted nobody. Its dump is a Redis RDB, not a
+  # Postgres dump: 587-592B over the last ten nights, 256B at its historical
+  # smallest, against ~28 keys. The 200B floor clears that whole range while
+  # still catching an emptied or truncated dump, which gzips to tens of bytes.
+  "Sheelot|gs://m84-backups/sheelot/|sheelot-couple-|/home/ofir/sheelot/logs/backup.log|200"
 )
 
 # A stable key per app, for the state file.
@@ -77,7 +83,10 @@ NEW_STATE=""
 WORST_DAYS=0
 
 for entry in "${SOURCES[@]}"; do
-  IFS='|' read -r label bucket prefix logpath <<<"$entry"
+  IFS='|' read -r label bucket prefix logpath minsize <<<"$entry"
+  # A per-source floor, because one global number cannot fit every backup:
+  # Sheelot's Redis RDB is ~590 bytes and entirely healthy at that size.
+  min_size=${minsize:-$MIN_SIZE_BYTES}
   key=$(key_for "$label")
   was_failing=$(prior_days "$key")
   failing=0
@@ -111,9 +120,9 @@ for entry in "${SOURCES[@]}"; do
       fi
 
       # Checked independently of age: a fresh file can still be a failed dump.
-      if (( latest_size < MIN_SIZE_BYTES )); then
+      if (( latest_size < min_size )); then
         failing=1
-        SMALL_LIST+="• ${label}: ${latest_size}B (${latest_name})\n"
+        SMALL_LIST+="• ${label}: ${latest_size}B, under its ${min_size}B floor (${latest_name})\n"
       fi
     fi
   fi
@@ -151,7 +160,7 @@ if [[ -n "$STALE_LIST" || -n "$SMALL_LIST" ]]; then
     MSG+=$'\n\n'"Missing (>${MAX_AGE_HOURS}h old):"$'\n'$(printf "$STALE_LIST")
   fi
   if [[ -n "$SMALL_LIST" ]]; then
-    MSG+=$'\n\n'"Too small to be a real backup (<${MIN_SIZE_BYTES}B):"$'\n'$(printf "$SMALL_LIST")
+    MSG+=$'\n\n'"Too small to be a real backup:"$'\n'$(printf "$SMALL_LIST")
   fi
   if [[ -n "$RECOVERED_LIST" ]]; then
     MSG+=$'\n\n'"Recovered:"$'\n'$(printf "$RECOVERED_LIST")
@@ -163,5 +172,5 @@ elif [[ -n "$RECOVERED_LIST" ]]; then
     || echo "[$(date -Iseconds)] failed to send Telegram alert"
   echo "[$(date -Iseconds)] recovery sent: $(echo -e "$RECOVERED_LIST" | grep -c '^•') back to normal"
 else
-  echo "[$(date -Iseconds)] all backups fresh (≤${MAX_AGE_HOURS}h) and above ${MIN_SIZE_BYTES}B"
+  echo "[$(date -Iseconds)] all backups fresh (≤${MAX_AGE_HOURS}h) and above their size floor"
 fi
