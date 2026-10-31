@@ -73,6 +73,11 @@ REQUIRED_CONTAINERS=(
   "sheelot-caddy"
   "sheelot-server"
   "sheelot-redis"
+  # The couple-game Redis is not a cache: it IS that game's database, and
+  # gs://m84-backups/sheelot/ backs up its RDB nightly. It was running
+  # unmonitored until 2026-10-31 — found by diffing `docker ps` against
+  # this list, which is worth doing after every deploy.
+  "sheelot-couple-redis"
   "bookme-app"
   "bookme-wa"
   "bookme-postgres"
