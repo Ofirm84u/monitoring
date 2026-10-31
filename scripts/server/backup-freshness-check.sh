@@ -43,7 +43,6 @@ SOURCES=(
   "BookMe|gs://m84-backups/bookme/|bookme-|/opt/bookme/logs/backup.log"
   "Kosher|gs://m84-backups/kosher/|kosher-|/opt/kosher/logs/backup.log"
   "SEO App|gs://m84-backups/seoapp/|seoapp-|/home/ofir/seoapp/logs/backup.log"
-  "Beit Eden|gs://m84-backups/beiteden/|beiteden-|/opt/beiteden/logs/backup.log"
   "Bizitis|gs://m84-backups/bizitis/|bizitis-|/home/ofir/bizitis/logs/backup.log"
   "PR Daily DB|gs://m84-backups/prdaily/|prdaily-2|/opt/prdaily/backups/cron.log"
   "PR Daily files|gs://m84-backups/prdaily/files/|prdaily-files-|/opt/prdaily/backups/files-backup.log"

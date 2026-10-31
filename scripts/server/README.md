@@ -34,7 +34,6 @@ Add to `crontab -e` on the VM:
 55 2 * * * /home/ofir/scripts/env-backup.sh >> /home/ofir/monitoring/env-backup.log 2>&1
 0 3 * * * /home/ofir/crm-mati/scripts/pg-backup.sh >> /home/ofir/crm-mati/logs/backup.log 2>&1
 20 3 * * * /home/ofir/seoapp/scripts/pg-backup.sh >> /home/ofir/seoapp/logs/backup.log 2>&1
-30 3 * * * /opt/beiteden/scripts/pg-backup.sh >> /opt/beiteden/logs/backup.log 2>&1
 40 3 * * * /home/ofir/bizitis/scripts/pg-backup-nightly.sh >> /home/ofir/bizitis/logs/backup.log 2>&1
 50 3 * * * /home/ofir/sheelot/backup-couple.sh >> /home/ofir/sheelot/logs/backup.log 2>&1
 55 3 * * * /opt/kosher/scripts/pg-backup.sh >> /opt/kosher/logs/backup.log 2>&1
@@ -125,3 +124,29 @@ their own apps: `/opt/kosher/scripts/pg-backup.sh`,
   days. It only ever runs `git fetch`, never `pull` or `checkout`: the clone at
   `/home/ofir/bizitis` is 37 commits behind with `build: context: .`, so pulling
   there would build an old version over a live site.
+
+## Decommissioned
+
+**Beit Eden** (`beiteden.m84.me`) was taken down on 2026-10-28 at Ofir's request.
+Its site block is gone from the Caddyfile, its three containers are stopped with
+`--restart=no`, and it has been removed from `server-monitor.sh` (site + three
+containers), `deploy-drift-check.sh`, `backup-freshness-check.sh` and
+`env-backup.sh`, and from the crontab.
+
+The final verified dump — 66 tables, 66 COPY blocks, 12 users, 31 staff, 98
+audit rows — is at `gs://m84-backups/beiteden/beiteden-2026-10-28-1729.sql.gz`
+**and that copy expires around 2026-11-26 under the bucket's 30-day lifecycle
+rule.** A second copy, with the `.env`, the compose file, the Caddy block and the
+git HEAD at decommission, is on the VM at `/home/ofir/decommissioned/beiteden/`.
+Move one somewhere permanent if the data is ever meant to be kept.
+
+The named volumes (`beiteden_postgres_data`, `beiteden_redis_data`,
+`beiteden_uploads_data`) were **not** deleted. `uploads_data` was verified empty.
+
+Two things worth knowing if another app is ever decommissioned:
+- **The monitor will resurrect it.** `server-monitor.sh` auto-recovery restarted
+  all three containers two minutes after they were stopped, because they were
+  still listed in `REQUIRED_CONTAINERS`. Remove the app from the monitor *before*
+  stopping anything.
+- **`restart: always` survives a manual stop** across a daemon restart or reboot.
+  `docker update --restart=no` is what actually keeps it down.
