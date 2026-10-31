@@ -20,6 +20,7 @@ The VM is `first-1appseo` in GCP project `ofirs-381811`, zone `me-west1-c`
 | `env-backup.sh` | `/home/ofir/scripts/env-backup.sh` |
 | `caddy-health-check.sh` | `/home/ofir/scripts/caddy-health-check.sh` |
 | `deploy-drift-check.sh` | `/home/ofir/scripts/deploy-drift-check.sh` |
+| `restore-drill.sh` | `/home/ofir/scripts/restore-drill.sh` |
 
 Note the two directories are different and both are in use: the Next.js app
 lives in `/home/ofir/monitor`, while the cron scripts, their logs and state
@@ -53,6 +54,10 @@ Add to `crontab -e` on the VM:
 # Added 2026-10-27, after bizitis served 1.4.1 for four days while GitHub main
 # was 1.4.0 and the VM's own clone said 1.3.0, with nobody noticing.
 0 11 * * * /home/ofir/scripts/deploy-drift-check.sh >> /home/ofir/scripts/drift.log 2>&1
+# Restore drill — runs daily, acts every 29 days (06:00 UTC)
+# 29 and not 30 deliberately: the bucket deletes at age 30, so a 30-day cycle
+# can drift past the window and test nothing.
+0 6 * * * /home/ofir/scripts/restore-drill.sh >> /home/ofir/scripts/restore-drill.log 2>&1
 
 # --- Disk hygiene ---
 # Changed 2026-06-03: weekly wasn't enough - bizitis backup tags accumulate
