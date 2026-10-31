@@ -50,9 +50,20 @@ for entry in "${APPS[@]}"; do
   if [[ "$kind" == "pm2" ]]; then
     [[ -r "$clone/package.json" ]] && run_ver=$(pkg_version < "$clone/package.json")
   elif [[ -n "$container" && "$container" != "-" ]]; then
-    image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
-    # A registry tag that looks like a git SHA is the strongest signal we can get.
-    if [[ "$image" =~ :([0-9a-f]{7,40})$ ]]; then run_sha="${BASH_REMATCH[1]}"; fi
+    # Prefer the OCI revision label. It is written at build time and survives
+    # retagging, whereas .Config.Image is only whatever the deploy happened to
+    # name. bizitis is exactly that case: its image carries the tags
+    # bizitis-app:1.5.1, bizitis-app:251aee1 and bizitis-app:latest, but the
+    # container names it plain "bizitis-app" — so reading the tag finds no SHA
+    # while the label gives 251aee1. Any app adopting this label is picked up
+    # here automatically, with no change to this list.
+    run_sha=$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container" 2>/dev/null)
+    [[ -z "$run_sha" || "$run_sha" == "<no value>" ]] && run_sha="-"
+    if [[ "$run_sha" == "-" ]]; then
+      image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
+      # Failing that, a registry tag shaped like a git SHA.
+      if [[ "$image" =~ :([0-9a-f]{7,40})$ ]]; then run_sha="${BASH_REMATCH[1]}"; fi
+    fi
     if [[ "$kind" == "node" ]]; then
       run_ver=$(docker exec "$container" cat /app/package.json 2>/dev/null | pkg_version)
     fi
