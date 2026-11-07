@@ -34,6 +34,7 @@ declare -A SITES=(
   ["sheelot"]="https://game.la-zug.co.il"
   ["bookme"]="https://bookme.m84.me"
   ["kosher"]="https://tzav.m84.me"
+  ["matibot"]="https://chatmati.m84.me"
   # The monitor itself. It crash-looped for 40 minutes on 2026-10-02 and nothing
   # alerted, because send_alert posts THROUGH it. Only worth watching now that
   # send_alert has a path that does not depend on it being up.
@@ -52,6 +53,7 @@ declare -A SITE_EXTRA_OK=()
 
 # Docker containers that should be running
 REQUIRED_CONTAINERS=(
+  "matibot-app"
   "caddy-caddy-1"
   "bizitis-postgres-1"
   "bizitis-redis-1"
@@ -73,6 +75,11 @@ REQUIRED_CONTAINERS=(
   "sheelot-caddy"
   "sheelot-server"
   "sheelot-redis"
+  # The couple-game Redis is not a cache: it IS that game's database, and
+  # gs://m84-backups/sheelot/ backs up its RDB nightly. It was running
+  # unmonitored until 2026-10-31 — found by diffing `docker ps` against
+  # this list, which is worth doing after every deploy.
+  "sheelot-couple-redis"
   "bookme-app"
   "bookme-wa"
   "bookme-postgres"
