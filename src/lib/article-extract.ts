@@ -1,6 +1,13 @@
 import { PDFParse } from "pdf-parse";
 
 const FETCH_TIMEOUT_MS = 15_000;
+// The reader fallback renders the page server-side, so it is slower than a
+// direct fetch and gets its own, longer budget.
+const READER_TIMEOUT_MS = 40_000;
+const READER_PREFIX = "https://r.jina.ai/";
+// Status codes that mean "a bot wall turned us away", as opposed to the page
+// genuinely being missing or broken. Only these are worth a second attempt.
+const BOT_WALL_STATUSES = new Set([401, 403, 405, 429, 503]);
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_TEXT_CHARS = 50_000;
@@ -62,6 +69,66 @@ function extractTitleFromHtml(html: string): string {
   return "Untitled";
 }
 
+/**
+ * Parse r.jina.ai output, which is markdown with a small metadata header:
+ *
+ *   Title: ...
+ *   URL Source: ...
+ *   Published Time: ...
+ *
+ *   Markdown Content:
+ *   <body>
+ */
+function parseReaderResponse(raw: string, fallbackHost: string): ExtractedContent {
+  const titleMatch = raw.match(/^Title:\s*(.+)$/m);
+  const title = titleMatch ? titleMatch[1].trim() : "Untitled";
+
+  const marker = raw.indexOf("Markdown Content:");
+  const body = marker === -1 ? raw : raw.slice(marker + "Markdown Content:".length);
+
+  const text = clampText(normalizeWhitespace(body));
+  if (text.length < 50) {
+    throw new Error(`Reader returned no usable text for ${fallbackHost}`);
+  }
+  return { title, text };
+}
+
+/**
+ * Some publishers (Search Engine Land, for one) sit behind Cloudflare bot
+ * management, which fingerprints the TLS handshake rather than reading the
+ * User-Agent — so no header we send gets us through, and a direct fetch is a
+ * flat 403.
+ *
+ * Rather than try to look like a browser, hand the URL to a public reader
+ * service that renders the page and returns plain markdown. This is the same
+ * thing a "reader mode" bookmarklet does; it is not an attempt to defeat the
+ * protection.
+ *
+ * Note the URL is disclosed to that third party. Fine for public articles,
+ * which is all this path ever sees.
+ */
+async function extractViaReader(
+  url: string,
+  host: string,
+): Promise<ExtractedContent> {
+  const res = await fetch(`${READER_PREFIX}${url}`, {
+    signal: AbortSignal.timeout(READER_TIMEOUT_MS),
+    headers: { Accept: "text/plain" },
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `${host} blocked the request, and the reader fallback also failed (HTTP ${res.status})`,
+    );
+  }
+
+  const raw = await res.text();
+  if (raw.length > MAX_HTML_BYTES) {
+    throw new Error(`Reader response too large (${raw.length} bytes)`);
+  }
+  return parseReaderResponse(raw, host);
+}
+
 export async function extractFromUrl(url: string): Promise<ExtractedContent> {
   const parsedUrl = new URL(url);
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
@@ -78,7 +145,12 @@ export async function extractFromUrl(url: string): Promise<ExtractedContent> {
     redirect: "follow",
   });
 
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${parsedUrl.host}`);
+  if (!res.ok) {
+    if (BOT_WALL_STATUSES.has(res.status)) {
+      return extractViaReader(url, parsedUrl.host);
+    }
+    throw new Error(`HTTP ${res.status} from ${parsedUrl.host}`);
+  }
 
   const contentType = res.headers.get("content-type") ?? "";
   const buf = await res.arrayBuffer();
