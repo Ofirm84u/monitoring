@@ -1,7 +1,7 @@
 import { exec } from "child_process";
 
 const EXEC_TIMEOUT_MS = 30_000;
-const MAX_BUFFER = 512 * 1024;
+const MAX_BUFFER = 4 * 1024 * 1024;
 
 function execCommand(command: string): Promise<{ stdout: string; exitCode: number }> {
   return new Promise((resolve) => {
@@ -71,17 +71,32 @@ const SOURCES: Array<{ app: string; label: string; bucket: string }> = [
   { app: "seoapp",  label: "SEO App",  bucket: "gs://m84-backups/seoapp/" },
   { app: "beiteden", label: "Beit Eden", bucket: "gs://m84-backups/beiteden/" },
   { app: "bizitis",  label: "Bizitis",  bucket: "gs://m84-backups/bizitis/" },
+  { app: "matibot",  label: "MatiBot",  bucket: "gs://m84-backups/matibot/" },
   { app: "prdaily",  label: "PR Daily DB", bucket: "gs://m84-backups/prdaily/" },
   { app: "prdaily-files", label: "PR Daily files", bucket: "gs://m84-backups/prdaily/files/" },
   { app: "env-files", label: ".env Secrets", bucket: "gs://m84-backups/env-files/" },
 ];
 
+/** Every object in the bucket, from one listing. */
+const ALL_OBJECTS = "gs://m84-backups/**";
+
 export async function getBackupStatus(): Promise<BackupStatus> {
+  // One listing for the whole bucket, split per app below. Nine parallel
+  // `gsutil` processes used to queue on gcloud's shared credential store and
+  // took ~31s each on this 2-vCPU VM, past the 30s timeout, so every row read
+  // "No backup found" while the backups were fine. One call takes ~3s.
+  const { stdout, exitCode } = await execCommand(`${GSUTIL} ls -l "${ALL_OBJECTS}"`);
+  const all = exitCode === 0 ? parseGsutil(stdout).files : [];
+
   const results = await Promise.all(
     SOURCES.map(async ({ app, label, bucket }): Promise<BackupInfo> => {
-      const { stdout, exitCode } = await execCommand(`${GSUTIL} ls -l ${bucket}`);
+      // Objects directly under this prefix, not in its subfolders, as the
+      // old per-prefix `gsutil ls` returned (prdaily/files/ is its own row).
+      const files = all.filter(
+        (f) => f.name.startsWith(bucket) && f.name.length > bucket.length && !f.name.slice(bucket.length).includes("/"),
+      );
 
-      if (exitCode !== 0 || !stdout.trim()) {
+      if (files.length === 0) {
         return {
           app, label,
           latestFile: null, latestDate: null,
@@ -91,7 +106,8 @@ export async function getBackupStatus(): Promise<BackupStatus> {
         };
       }
 
-      const { files, totalObjects, totalBytes } = parseGsutil(stdout);
+      const totalObjects = files.length;
+      const totalBytes = files.reduce((n, f) => n + f.sizeBytes, 0);
       files.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       const latest = files[0] ?? null;
       const ageHours = latest
