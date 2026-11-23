@@ -55,6 +55,10 @@ export type MemberRole = (typeof MEMBER_ROLES)[number];
 export const MEMBER_STATUSES = ["pending", "active"] as const;
 export type MemberStatus = (typeof MEMBER_STATUSES)[number];
 
+// App-wide role, distinct from per-project MEMBER_ROLES: admins manage who can sign in.
+export const TEAM_ROLES = ["admin", "member"] as const;
+export type TeamRole = (typeof TEAM_ROLES)[number];
+
 export const RECURRENCES = ["none", "daily", "weekly", "monthly"] as const;
 export type Recurrence = (typeof RECURRENCES)[number];
 
@@ -231,6 +235,12 @@ export const tasks = sqliteTable(
     projectId: text("project_id").references(() => projects.id, {
       onDelete: "set null",
     }),
+    // Who should do it, distinct from `userId` (who created and owns the row).
+    // Must be the project owner or an active member; personal tasks can only be
+    // assigned to their owner. A deleted user unassigns rather than deletes.
+    assigneeId: text("assignee_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     text: text("text").notNull(),
     done: integer("done", { mode: "boolean" }).notNull().default(false),
     priority: text("priority").$type<Priority>().notNull().default("medium"),
@@ -247,6 +257,7 @@ export const tasks = sqliteTable(
     index("tasks_user_idx").on(t.userId),
     index("tasks_project_idx").on(t.projectId),
     index("tasks_area_idx").on(t.areaId),
+    index("tasks_assignee_idx").on(t.assigneeId),
     // Idempotent recurrence materialization (FR-REC-3): a parent chain can have
     // at most one occurrence per due date, so double-completion can't duplicate.
     uniqueIndex("tasks_recurrence_occurrence_uq").on(
@@ -281,6 +292,21 @@ export const telegramLinkCodes = sqliteTable(
   (t) => [index("telegram_link_codes_user_idx").on(t.userId)],
 );
 
+/**
+ * Who may sign in, managed from the Team page (FR-AUTH-2). Checked alongside
+ * the ALLOWED_EMAILS env var, which stays as a bootstrap/break-glass list. The
+ * OWNER_EMAIL account is implicitly an admin and never stored here.
+ */
+export const allowedUsers = sqliteTable("allowed_users", {
+  id: text("id").primaryKey().$defaultFn(() => randomUUID()),
+  email: text("email").notNull().unique(), // normalized at write time
+  role: text("role").$type<TeamRole>().notNull().default("member"),
+  addedBy: text("added_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 export const calendarSyncState = sqliteTable("calendar_sync_state", {
   userId: text("user_id")
     .primaryKey()
@@ -308,6 +334,7 @@ export type NewTask = typeof tasks.$inferInsert;
 export type TelegramLink = typeof telegramLinks.$inferSelect;
 export type TelegramLinkCode = typeof telegramLinkCodes.$inferSelect;
 export type CalendarSyncState = typeof calendarSyncState.$inferSelect;
+export type AllowedUser = typeof allowedUsers.$inferSelect;
 
 /* =========================================================================
  * Idea Runner — agent runs, defects, and the gate ladder.
