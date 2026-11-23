@@ -20,6 +20,10 @@ const PUBLIC_ROUTES = [
   "/api/alert",
   "/api/auth", // Auth.js (NextAuth) handlers, incl. Google callback
   "/api/spike", // PM Hub spike routes (self-authenticated)
+  // Password setup: the one-time link is the credential. /api/pm/setup/owner
+  // sits under this prefix but checks the owner session in its handler.
+  "/setup",
+  "/api/pm/setup",
   // Idea Runner agent routes. These carry no session and no bot token: the
   // callback and review endpoints are authenticated by an HMAC signature over
   // the raw body, and the packet endpoint by a short-lived token bound to the
