@@ -55,13 +55,13 @@ Add to `crontab -e` on the VM:
 # Added 2026-10-27, after bizitis served 1.4.1 for four days while GitHub main
 # was 1.4.0 and the VM's own clone said 1.3.0, with nobody noticing.
 0 11 * * * /home/ofir/scripts/deploy-drift-check.sh >> /home/ofir/scripts/drift.log 2>&1
-# Restore drill — runs daily, acts every 29 days (06:00 UTC)
-# 29 and not 30 deliberately: the bucket deletes at age 30, so a 30-day cycle
-# can drift past the window and test nothing.
 # Cluster roles, grants and memberships (02:45 UTC, before the DB dumps)
 # pg_dump does not capture roles — they are cluster-level. Without this, any
 # dump containing RLS policies or grants cannot be restored at all.
 45 2 * * * /home/ofir/scripts/pg-globals-backup.sh >> /home/ofir/scripts/pg-globals.log 2>&1
+# Restore drill — runs daily, acts every 29 days (06:00 UTC)
+# 29 and not 30 deliberately: the bucket deletes at age 30, so a 30-day cycle
+# can drift past the window and test nothing.
 0 6 * * * /home/ofir/scripts/restore-drill.sh >> /home/ofir/scripts/restore-drill.log 2>&1
 
 # --- Disk hygiene ---
@@ -160,6 +160,33 @@ Two things worth knowing if another app is ever decommissioned:
   stopping anything.
 - **`restart: always` survives a manual stop** across a daemon restart or reboot.
   `docker update --restart=no` is what actually keeps it down.
+
+- `restore-drill.sh` needs `gsutil`, `docker` and `jq`, and reads
+  `GITHUB_TOKEN` out of `/home/ofir/monitor/.env.production` (override with
+  `GITHUB_ENV_FILE`). It reports a failing drill **twice over**: it opens a
+  GitHub issue in `Ofirm84u/monitoring` labelled `restore-drill`, and it sends
+  a Telegram alert. Both, deliberately — the issue is the record and stays open
+  until a later drill proves the backup restores again, while Telegram is the
+  alarm that arrives even when GitHub is unreachable. A second failure
+  comments on the existing issue instead of opening a duplicate, and the first
+  passing drill comments the recovery and closes it.
+  - **The PAT needs `Issues: Read and write` on `Ofirm84u/monitoring`.** With
+    read-only Issues access the drill can open an issue but every comment,
+    label and close answers `403 Resource not accessible by personal access
+    token`, so there is no dedupe and nothing ever auto-closes. The script
+    detects this — it reads the HTTP status rather than curl's exit code,
+    because `curl` exits 0 on a 403 — logs the status and GitHub's own message,
+    and raises a separate Telegram alert saying the report could not be filed.
+    An alerting path that fails silently is worse than no alerting path.
+  - Exit status keeps one meaning only: non-zero means **a backup did not
+    restore**. A drill that passed but could not file its report still exits 0,
+    and says so on Telegram instead — overloading the exit code would make
+    "the backups are broken" and "GitHub is unreachable" indistinguishable.
+  - `GITHUB_REPO=""` turns GitHub reporting off and leaves Telegram alone.
+    `STATE` and `TELEGRAM` are overridable for the same reason: testing a
+    change to the drill must not reset the 29-day clock or page anybody.
+  - The token is passed to `curl` through a config file on stdin, never on the
+    command line, because argv is readable by `ps` for the life of the call.
 
 - `pg-globals-backup.sh` writes `pg_dumpall --globals-only` per cluster to
   `gs://m84-backups/pg-globals/`, discovering the Postgres containers rather
