@@ -29,6 +29,20 @@
       "when": 1790947691370,
       "tag": "0003_omniscient_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795454570796,
+      "tag": "0004_task_assignee",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795455811432,
+      "tag": "0005_allowed_users",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,18 @@ import { isAllowedEmail, normalizeEmail } from "@/lib/email-normalize";
 
 const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 
+/**
+ * The normalized email of a sign-in attempt, or null when there is none or
+ * Google says it isn't verified (NFR-SEC-4).
+ */
+export function verifiedSignInEmail(
+  user: { email?: string | null },
+  profile: { email?: string | null; email_verified?: boolean | null } | undefined,
+): string | null {
+  if (profile?.email_verified === false) return null;
+  return normalizeEmail(user.email ?? profile?.email);
+}
+
 export const authConfig: NextAuthConfig = {
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
@@ -33,18 +45,11 @@ export const authConfig: NextAuthConfig = {
     }),
   ],
   callbacks: {
+    // Env-only allowlist here; src/auth.ts overrides this to also consult the
+    // Team table, which the edge can't reach.
     async signIn({ user, profile }) {
-      const email = normalizeEmail(user.email ?? profile?.email);
-      if (!email) return false;
-      // Require a Google-verified email (NFR-SEC-4).
-      if (
-        profile &&
-        (profile as { email_verified?: boolean }).email_verified === false
-      ) {
-        return false;
-      }
-      // Allowlist gate (FR-AUTH-2): non-allowlisted accounts are rejected.
-      return isAllowedEmail(email);
+      const email = verifiedSignInEmail(user, profile);
+      return !!email && isAllowedEmail(email);
     },
     async jwt({ token, user }) {
       if (user?.id) token.uid = user.id;

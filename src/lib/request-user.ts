@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { verifyBotTokenHeader } from "@/lib/auth";
 import { isOwnerEmail } from "@/lib/email-normalize";
+import { isUserAllowed } from "@/lib/team";
 import { db } from "@/db";
 import { users, telegramLinks } from "@/db/schema";
 
@@ -21,6 +22,14 @@ export interface RequestUser {
  *    token still cannot impersonate an arbitrary tenant.
  */
 export async function getRequestUser(request: Request): Promise<RequestUser | null> {
+  const user = await resolveRequestUser(request);
+  // Sessions are long-lived JWTs, so removal from the team must be enforced
+  // per request — otherwise a removed teammate keeps access until expiry.
+  if (!user || !(await isUserAllowed(user.email))) return null;
+  return user;
+}
+
+async function resolveRequestUser(request: Request): Promise<RequestUser | null> {
   const session = await auth();
   const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
   if (sessionUserId) {
