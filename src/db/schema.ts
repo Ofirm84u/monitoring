@@ -70,7 +70,29 @@ export const users = sqliteTable("user", {
   email: text("email").unique(),
   emailVerified: integer("emailVerified", { mode: "timestamp_ms" }),
   image: text("image"),
+  // scrypt hash for email+password sign-in (src/lib/password.ts). Null until
+  // the user completes a setup link; Auth.js itself never reads it.
+  passwordHash: text("password_hash"),
 });
+
+/**
+ * One-time links that let someone set (or reset) their password. Only the
+ * SHA-256 of the token is stored, so a leaked DB doesn't yield working links.
+ */
+export const passwordSetupTokens = sqliteTable(
+  "password_setup_tokens",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    email: text("email").notNull(), // normalized
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    usedAt: integer("used_at", { mode: "timestamp_ms" }),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [index("password_setup_tokens_email_idx").on(t.email)],
+);
 
 export const accounts = sqliteTable(
   "account",

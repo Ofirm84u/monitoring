@@ -34,6 +34,10 @@ export default function TeamPage() {
   const [isForbidden, setIsForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Signed in only with the break-glass owner password: no PM account yet.
+  const [needsOwnerAccount, setNeedsOwnerAccount] = useState(false);
+  const [shareLink, setShareLink] = useState<{ email: string; url: string } | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "member">("member");
@@ -47,6 +51,10 @@ export default function TeamPage() {
         fetch("/api/pm/team", { cache: "no-store" }),
         fetch("/api/pm/projects", { cache: "no-store" }),
       ]);
+      if (teamResponse.status === 401) {
+        setNeedsOwnerAccount(true);
+        return;
+      }
       if (teamResponse.status === 403) {
         setIsForbidden(true);
         return;
@@ -68,6 +76,53 @@ export default function TeamPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const showLink = (linkEmail: string, url: string) => {
+    setShareLink({ email: linkEmail, url });
+    setIsCopied(false);
+  };
+
+  const copyLink = async () => {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink.url);
+      setIsCopied(true);
+    } catch (err) {
+      console.error("Clipboard write failed:", err);
+      setError("Couldn't copy automatically. Select the link and copy it.");
+    }
+  };
+
+  const issueLink = async (member: TeamMember) => {
+    setError(null);
+    setNotice(null);
+    const response = await fetch("/api/pm/team/setup-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: member.email }),
+    });
+    if (!response.ok) {
+      setError(await readError(response, "Could not create a link"));
+      return;
+    }
+    const data = (await response.json()) as { url: string };
+    setNotice(`New setup link for ${member.email}. Any older link for them no longer works.`);
+    showLink(member.email, data.url);
+  };
+
+  const createOwnerAccount = async () => {
+    setError(null);
+    const response = await fetch("/api/pm/setup/owner", { method: "POST" });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!response.ok) {
+      setError(await readError(response, "Could not start account setup"));
+      return;
+    }
+    window.location.href = ((await response.json()) as { url: string }).url;
+  };
 
   const toggleProject = (projectId: string) => {
     setGrants((current) => {
@@ -91,11 +146,12 @@ export default function TeamPage() {
         }),
       });
       if (!response.ok) throw new Error(await readError(response, "Could not add user"));
-      const data = (await response.json()) as { email: string; invitedProjectIds: string[] };
+      const data = (await response.json()) as { email: string; invitedProjectIds: string[]; setupUrl: string | null };
       const projectCount = data.invitedProjectIds.length;
       setNotice(
-        `${data.email} can now sign in with Google${projectCount ? ` and was added to ${projectCount} project${projectCount === 1 ? "" : "s"}` : ""}.`,
+        `${data.email} was added${projectCount ? ` to the team and ${projectCount} project${projectCount === 1 ? "" : "s"}` : ""}. Send them the link below so they can set a password.`,
       );
+      if (data.setupUrl) showLink(data.email, data.setupUrl);
       setEmail("");
       setRole("member");
       setGrants({});
@@ -151,7 +207,22 @@ export default function TeamPage() {
         </Link>
       </div>
 
-      {isForbidden ? (
+      {needsOwnerAccount ? (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 text-sm text-slate-600">
+          {error && <p className="mb-3 text-red-600">{error}</p>}
+          <p className="mb-3">
+            You&apos;re signed in with the owner backup password, which only covers the monitoring pages. Create your
+            email + password account to manage the team and projects.
+          </p>
+          <button
+            type="button"
+            onClick={() => void createOwnerAccount()}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+          >
+            Create my account
+          </button>
+        </div>
+      ) : isForbidden ? (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 text-sm text-slate-600">
           Only admins can manage the team. Ask an admin to add people.
         </div>
@@ -162,6 +233,29 @@ export default function TeamPage() {
           )}
           {notice && (
             <div className="mb-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-sm">{notice}</div>
+          )}
+          {shareLink && (
+            <div className="mb-6 p-4 bg-white border border-indigo-200 rounded-2xl shadow-sm">
+              <p className="text-xs font-semibold text-slate-600 mb-2">
+                Setup link for {shareLink.email} · works once, expires in 72 hours
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={shareLink.url}
+                  onFocus={(e) => e.target.select()}
+                  className="flex-1 min-w-0 px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-slate-50"
+                />
+                <button
+                  type="button"
+                  onClick={() => void copyLink()}
+                  className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+                >
+                  {isCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            </div>
           )}
 
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-6">
@@ -246,6 +340,14 @@ export default function TeamPage() {
                   <p className="text-sm font-semibold text-slate-800 truncate">{member.name ?? member.email}</p>
                   {member.name && <p className="text-xs text-slate-500 truncate">{member.email}</p>}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void issueLink(member)}
+                  className="text-xs text-indigo-600 hover:text-indigo-800"
+                  title="One-time link to set or reset their password"
+                >
+                  Setup link
+                </button>
                 <span
                   className={`px-2 py-0.5 rounded-md text-xs font-semibold ${
                     member.isActive ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
