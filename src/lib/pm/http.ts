@@ -32,6 +32,14 @@ export async function requireUser(request: Request): Promise<RequestUser | null>
   return user;
 }
 
+/**
+ * Public origin for links we hand out. Behind Caddy, request.url is the
+ * internal localhost address, so APP_BASE_URL wins when set.
+ */
+export function appBaseUrl(request: Request): string {
+  return process.env.APP_BASE_URL?.replace(/\/$/, "") || new URL(request.url).origin;
+}
+
 export class BadRequestError extends Error {}
 
 /** Parse a JSON object body, rejecting oversized or non-object payloads. */

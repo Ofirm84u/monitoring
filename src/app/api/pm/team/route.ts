@@ -1,8 +1,10 @@
 import { TEAM_ROLES } from "@/db/schema";
+import { createSetupLink } from "@/lib/accounts";
 import { assertProjectAccess } from "@/lib/access";
 import { normalizeEmail } from "@/lib/email-normalize";
 import {
   BadRequestError,
+  appBaseUrl,
   denied,
   handle,
   json,
@@ -88,7 +90,13 @@ export async function POST(request: Request) {
       // 409 = already invited to that project; harmless here.
       if (result.ok) invited.push(grant.projectId);
     }
-    return json(201, { email: added.email, invitedProjectIds: invited });
+    // Hand the admin the link to pass on; the new user picks their own password.
+    const link = await createSetupLink(email, user.id, appBaseUrl(request));
+    return json(201, {
+      email: added.email,
+      invitedProjectIds: invited,
+      setupUrl: link.ok ? link.url : null,
+    });
   });
 }
 
