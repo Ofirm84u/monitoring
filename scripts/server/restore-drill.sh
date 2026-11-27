@@ -61,6 +61,7 @@ TARGETS=(
   "pg-globals|pg-globals/|kosher-postgres-|globals|-|kosher-postgres"
   "env-files|env-files/|env-files-|tar|-|-"
   "prdaily-files|prdaily/files/|prdaily-files-|tar|-|-"
+  "crm-mati-files|crm-mati-files/|crm-mati-files-|tar|-|-"
 )
 
 log() { echo "[$(date -Iseconds)] $*"; }
