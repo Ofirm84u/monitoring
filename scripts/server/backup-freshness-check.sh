@@ -46,6 +46,7 @@ SOURCES=(
   "Bizitis|gs://m84-backups/bizitis/|bizitis-|/home/ofir/bizitis/logs/backup.log"
   "PR Daily DB|gs://m84-backups/prdaily/|prdaily-2|/opt/prdaily/backups/cron.log"
   "PR Daily files|gs://m84-backups/prdaily/files/|prdaily-files-|/opt/prdaily/backups/files-backup.log"
+  "CRM Mati files|gs://m84-backups/crm-mati-files/|crm-mati-files-|/home/ofir/crm-mati/logs/files-backup.log|200"
   "env-files|gs://m84-backups/env-files/||/home/ofir/monitoring/env-backup.log"
   # Added 2026-10-31: Sheelot was in no SOURCES list, so a silent stop of its
   # nightly backup would have alerted nobody. Its dump is a Redis RDB, not a

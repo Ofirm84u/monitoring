@@ -14,6 +14,7 @@ The VM is `first-1appseo` in GCP project `ofirs-381811`, zone `me-west1-c`
 | `backup-freshness-check.sh` | `/home/ofir/scripts/backup-freshness-check.sh` |
 | `bizitis-pg-backup.sh` | `/home/ofir/bizitis/scripts/pg-backup-nightly.sh` |
 | `prdaily-files-backup.sh` | `/opt/prdaily/scripts/files-backup.sh` |
+| `crm-mati-files-backup.sh` | `/home/ofir/crm-mati/scripts/files-backup.sh` |
 | `crm-mati-pg-backup.sh` | `/home/ofir/crm-mati/scripts/pg-backup.sh` |
 | `server-monitor.sh` | `/home/ofir/monitoring/server-monitor.sh` |
 | `crm-gmail-check.sh` | `/home/ofir/monitoring/crm-gmail-check.sh` |
@@ -42,6 +43,8 @@ Add to `crontab -e` on the VM:
 0 4 * * * /opt/prdaily/scripts/pg-backup.sh >> /opt/prdaily/backups/cron.log 2>&1
 # PR Daily files - marketing plans + chroma vector DB, 5 min after its DB dump
 5 4 * * * /opt/prdaily/scripts/files-backup.sh >> /opt/prdaily/backups/files-backup.log 2>&1
+# CRM Mati attachments (/opt/crm-mati/uploads), encrypted - 10 min after its DB dump
+10 3 * * * /home/ofir/crm-mati/scripts/files-backup.sh >> /home/ofir/crm-mati/logs/files-backup.log 2>&1
 
 # --- Monitoring ---
 */2 * * * * /home/ofir/monitoring/server-monitor.sh >> /home/ofir/monitoring/monitor.log 2>&1
