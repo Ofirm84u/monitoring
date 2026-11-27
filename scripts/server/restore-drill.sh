@@ -221,6 +221,17 @@ fi
 log "=== restore drill starting (interval ${INTERVAL_DAYS}d) ==="
 PASS=0; FAILED=""
 
+# Objects ending in .age are age-encrypted (since 2026-11-27); older ones are
+# plain. Either way this prints the stored bytes (gzip) on stdout.
+AGE_IDENTITY=/home/ofir/.config/age/m84-backups.key
+fetch() {  # $1=gs:// object
+  if [[ "$1" == *.age ]]; then
+    "$GSUTIL" cat "$1" 2>/dev/null | age -d -i "$AGE_IDENTITY"
+  else
+    "$GSUTIL" cat "$1" 2>/dev/null
+  fi
+}
+
 newest_object() {  # $1=gcs prefix  $2=object prefix
   "$GSUTIL" ls -l "${BUCKET}/${1}**" 2>/dev/null | grep -v '^TOTAL' \
     | grep -E "/${2}[^/]*$" | sort -k2,2 | tail -1 | awk '{print $3}'
@@ -229,7 +240,7 @@ newest_object() {  # $1=gcs prefix  $2=object prefix
 drill_pg() {  # label image prod_container object
   local label="$1" image="$2" prod="$3" obj="$4"
   local sql="$WORK/${label}.sql"
-  "$GSUTIL" cat "$obj" 2>/dev/null | zcat > "$sql" || { echo "download/gunzip failed"; return 1; }
+  fetch "$obj" | zcat > "$sql" || { echo "download/gunzip failed"; return 1; }
   local want_tables; want_tables=$(grep -c '^CREATE TABLE' "$sql")
   (( want_tables > 0 )) || { echo "dump contains no CREATE TABLE"; return 1; }
 
@@ -246,7 +257,7 @@ drill_pg() {  # label image prod_container object
   local globals
   globals=$("$GSUTIL" ls "${BUCKET}/pg-globals/${prod}-*" 2>/dev/null | sort | tail -1)
   if [[ -n "$globals" ]]; then
-    "$GSUTIL" cat "$globals" 2>/dev/null | zcat > "$WORK/${label}.globals.sql"
+    fetch "$globals" | zcat > "$WORK/${label}.globals.sql"
     # ON_ERROR_STOP is deliberately off here: a globals dump re-creates the
     # superuser the container already has, which errors harmlessly.
     docker exec -i drill-pg psql -U postgres -d postgres --quiet \
@@ -294,7 +305,7 @@ drill_pg() {  # label image prod_container object
 
 drill_redis() {  # label image object
   local label="$1" image="$2" obj="$3"
-  "$GSUTIL" cat "$obj" 2>/dev/null | zcat > "$WORK/dump.rdb" || { echo "download/gunzip failed"; return 1; }
+  fetch "$obj" | zcat > "$WORK/dump.rdb" || { echo "download/gunzip failed"; return 1; }
   # create, copy, THEN start. Starting first and restarting does not work:
   # redis saves its (empty) dataset on shutdown and overwrites the RDB being
   # tested before it is ever read — which is why this reported "empty" on a
@@ -313,7 +324,7 @@ drill_redis() {  # label image object
 
 drill_tar() {  # label object
   local label="$1" obj="$2" f="$WORK/${label}.tar.gz"
-  "$GSUTIL" cp "$obj" "$f" >/dev/null 2>&1 || { echo "download failed"; return 1; }
+  fetch "$obj" > "$f" || { echo "download/decrypt failed"; return 1; }
   gzip -t "$f" 2>/dev/null || { echo "gzip integrity failed"; return 1; }
   local n; n=$(tar -tzf "$f" 2>/dev/null | grep -c .)
   (( n > 0 )) || { echo "archive is empty"; return 1; }
@@ -323,7 +334,7 @@ drill_tar() {  # label object
 
 drill_globals() {  # label object — a globals dump with no roles is not a backup
   local label="$1" obj="$2" f="$WORK/${label}.sql"
-  "$GSUTIL" cat "$obj" 2>/dev/null | zcat > "$f" || { echo "download/gunzip failed"; return 1; }
+  fetch "$obj" | zcat > "$f" || { echo "download/gunzip failed"; return 1; }
   local roles; roles=$(grep -c '^CREATE ROLE' "$f")
   (( roles > 0 )) || { echo "no CREATE ROLE statements"; return 1; }
   grep -q 'PASSWORD' "$f" || echo -n ""   # hashes present is normal; never printed
