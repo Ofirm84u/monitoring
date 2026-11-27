@@ -15,7 +15,10 @@ CONTAINER="crm-mati-postgres"
 # that reaches the metadata server gets a token that can read it. Only the
 # public key is needed here; the private key decrypts (restore-drill.sh, and an
 # offline copy for when this VM is gone).
-AGE_RECIPIENTS=/home/ofir/.config/age/m84-backups.pub
+# Two recipients (one per line): the master backup key, and a CRM-only
+# recovery key held by Keren, so the CRM can be restored without the master
+# key (which also opens every other app's backups). Either key decrypts.
+AGE_RECIPIENTS=/home/ofir/.config/age/crm-mati.recipients
 AGE_IDENTITY=/home/ofir/.config/age/m84-backups.key
 [ -s "$AGE_RECIPIENTS" ] || { echo "[$(date -Iseconds)] ERROR: $AGE_RECIPIENTS missing - refusing to write an unencrypted backup"; exit 1; }
 
