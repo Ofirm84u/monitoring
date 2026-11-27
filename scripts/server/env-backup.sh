@@ -5,9 +5,18 @@
 set -euo pipefail
 
 GCS_BUCKET="gs://m84-backups"
+
+# Backups are age-encrypted before they leave this script (security review
+# 2026-11-27): the bucket is shared by every app on the VM, and any container
+# that reaches the metadata server gets a token that can read it. Only the
+# public key is needed here; the private key decrypts (restore-drill.sh, and an
+# offline copy for when this VM is gone).
+AGE_RECIPIENTS=/home/ofir/.config/age/m84-backups.pub
+AGE_IDENTITY=/home/ofir/.config/age/m84-backups.key
+[ -s "$AGE_RECIPIENTS" ] || { echo "[$(date -Iseconds)] ERROR: $AGE_RECIPIENTS missing - refusing to upload secrets unencrypted"; exit 1; }
 BACKUP_DIR=$(mktemp -d /tmp/env-backup-XXXXXX)
 TIMESTAMP=$(date +%Y-%m-%d-%H%M)
-OUTFILE="/tmp/env-files-${TIMESTAMP}.tar.gz"
+OUTFILE="/tmp/env-files-${TIMESTAMP}.tar.gz.age"
 
 # Always clean up, even on failure — these dirs hold plaintext secrets.
 trap 'rm -rf "$BACKUP_DIR" "$OUTFILE"' EXIT
@@ -44,12 +53,13 @@ if [ "$found" -eq 0 ]; then
   exit 1
 fi
 
-tar -czf "$OUTFILE" -C "$BACKUP_DIR" .
+tar -czf - -C "$BACKUP_DIR" . | age -R "$AGE_RECIPIENTS" > "$OUTFILE"
+age -d -i "$AGE_IDENTITY" "$OUTFILE" | gzip -t
 SIZE=$(du -h "$OUTFILE" | cut -f1)
 echo "[$(date -Iseconds)] env archive ready ($SIZE, $found files, $missing missing)"
 
-gsutil -q cp "$OUTFILE" "$GCS_BUCKET/env-files/env-files-${TIMESTAMP}.tar.gz"
-echo "[$(date -Iseconds)] uploaded to GCS: $GCS_BUCKET/env-files/env-files-${TIMESTAMP}.tar.gz"
+gsutil -q cp "$OUTFILE" "$GCS_BUCKET/env-files/env-files-${TIMESTAMP}.tar.gz.age"
+echo "[$(date -Iseconds)] uploaded to GCS: $GCS_BUCKET/env-files/env-files-${TIMESTAMP}.tar.gz.age"
 
 # GCS retention: 30-day delete lifecycle on the bucket.
 echo "[$(date -Iseconds)] done"

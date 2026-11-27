@@ -18,6 +18,14 @@
 set -uo pipefail
 
 BUCKET="gs://m84-backups/pg-globals"
+
+# Backups are age-encrypted before they leave this script (security review
+# 2026-11-27): the bucket is shared by every app on the VM, and any container
+# that reaches the metadata server gets a token that can read it. Only the
+# public key is needed here; the private key decrypts (restore-drill.sh, and an
+# offline copy for when this VM is gone).
+AGE_RECIPIENTS=/home/ofir/.config/age/m84-backups.pub
+AGE_IDENTITY=/home/ofir/.config/age/m84-backups.key
 LOCAL=/home/ofir/pg-globals
 RETAIN_DAYS=7
 GSUTIL=$(command -v gsutil || echo /snap/bin/gsutil)
@@ -32,6 +40,7 @@ mkdir -p "$LOCAL"
 chmod 700 "$LOCAL"
 
 [[ -x "$GSUTIL" ]] || { log "ERROR: gsutil not found"; exit 1; }
+[[ -s "$AGE_RECIPIENTS" ]] || { log "ERROR: $AGE_RECIPIENTS missing - refusing to upload password hashes unencrypted"; exit 1; }
 
 # Discovery by image name alone is not enough: kosher-jobs runs FROM
 # postgres:18-alpine but is a job runner, not a server, and pg_dumpall against
@@ -74,7 +83,13 @@ for c in "${CONTAINERS[@]}"; do
     mv "$out" "${out}.rejected"; failed+="$c "; continue
   fi
 
-  if ! "$GSUTIL" -q cp "$out" "${BUCKET}/${c}-${STAMP}.sql.gz" 2>/dev/null; then
+  # Encrypt for upload; the plaintext exists only long enough for the check above.
+  if ! age -R "$AGE_RECIPIENTS" -o "${out}.age" "$out" || ! age -d -i "$AGE_IDENTITY" "${out}.age" | gzip -t; then
+    log "FAIL $c: encryption failed"; rm -f "${out}.age"; failed+="$c "; continue
+  fi
+  rm -f "$out"; out="${out}.age"; chmod 600 "$out"
+
+  if ! "$GSUTIL" -q cp "$out" "${BUCKET}/${c}-${STAMP}.sql.gz.age" 2>/dev/null; then
     log "FAIL $c: upload failed — the local copy at $out is the only one"
     failed+="$c "; continue
   fi
@@ -82,7 +97,7 @@ for c in "${CONTAINERS[@]}"; do
   ok=$((ok + 1))
 done
 
-find "$LOCAL" -name '*.sql.gz' -mtime +$RETAIN_DAYS -delete 2>/dev/null
+find "$LOCAL" -name '*.sql.gz*' -mtime +$RETAIN_DAYS -delete 2>/dev/null
 log "done: ${ok}/${#CONTAINERS[@]} clusters${failed:+ | FAILED: ${failed}}"
 
 if [[ -n "$failed" ]]; then
