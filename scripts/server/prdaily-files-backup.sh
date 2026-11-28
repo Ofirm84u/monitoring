@@ -28,8 +28,9 @@ sudo chown ofir:ofir "$OUTFILE"
 SIZE=$(du -h "$OUTFILE" | cut -f1)
 echo "[$(date -Iseconds)] tar complete ($SIZE)"
 
-gsutil cp "$OUTFILE" "$GCS_BUCKET/${APP}/files/${APP}-files-${TIMESTAMP}.tar.gz"
+OUTFILE=$(/home/ofir/scripts/encrypt-for-upload.sh "$OUTFILE")   # age-encrypt before it leaves the VM
+gsutil cp "$OUTFILE" "$GCS_BUCKET/${APP}/files/${APP}-files-${TIMESTAMP}.tar.gz.age"
 echo "[$(date -Iseconds)] uploaded to GCS: $GCS_BUCKET/$APP/files/"
 
-find "$BACKUP_DIR" -name "${APP}-files-*.tar.gz" -mtime +$LOCAL_RETENTION_DAYS -delete
+find "$BACKUP_DIR" -name "${APP}-files-*.tar.gz*" -mtime +$LOCAL_RETENTION_DAYS -delete
 echo "[$(date -Iseconds)] pruned local file-backups older than $LOCAL_RETENTION_DAYS days"

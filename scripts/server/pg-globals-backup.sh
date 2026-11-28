@@ -97,7 +97,7 @@ for c in "${CONTAINERS[@]}"; do
   ok=$((ok + 1))
 done
 
-find "$LOCAL" -name '*.sql.gz*' -mtime +$RETAIN_DAYS -delete 2>/dev/null
+find "$LOCAL" \( -name '*.sql.gz' -o -name '*.sql.gz.age' \) -mtime +$RETAIN_DAYS -delete 2>/dev/null
 log "done: ${ok}/${#CONTAINERS[@]} clusters${failed:+ | FAILED: ${failed}}"
 
 if [[ -n "$failed" ]]; then
