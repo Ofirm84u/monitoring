@@ -15,6 +15,7 @@ The VM is `first-1appseo` in GCP project `ofirs-381811`, zone `me-west1-c`
 | `bizitis-pg-backup.sh` | `/home/ofir/bizitis/scripts/pg-backup-nightly.sh` |
 | `prdaily-files-backup.sh` | `/opt/prdaily/scripts/files-backup.sh` |
 | `crm-mati-files-backup.sh` | `/home/ofir/crm-mati/scripts/files-backup.sh` |
+| `encrypt-for-upload.sh` | `/home/ofir/scripts/encrypt-for-upload.sh` (shared: every backup script encrypts with it before upload) |
 | `crm-mati-pg-backup.sh` | `/home/ofir/crm-mati/scripts/pg-backup.sh` |
 | `server-monitor.sh` | `/home/ofir/monitoring/server-monitor.sh` |
 | `crm-gmail-check.sh` | `/home/ofir/monitoring/crm-gmail-check.sh` |

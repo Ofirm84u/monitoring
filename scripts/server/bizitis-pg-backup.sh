@@ -23,8 +23,9 @@ docker exec "$CONTAINER" sh -c \
 SIZE=$(du -h "$OUTFILE" | cut -f1)
 echo "[$(date -Iseconds)] dump complete ($SIZE)"
 
-gsutil cp "$OUTFILE" "$GCS_BUCKET/${APP}/${APP}-${TIMESTAMP}.sql.gz"
+OUTFILE=$(/home/ofir/scripts/encrypt-for-upload.sh "$OUTFILE")   # age-encrypt before it leaves the VM
+gsutil cp "$OUTFILE" "$GCS_BUCKET/${APP}/${APP}-${TIMESTAMP}.sql.gz.age"
 echo "[$(date -Iseconds)] uploaded to GCS: $GCS_BUCKET/$APP/"
 
-find "$BACKUP_DIR" -name "${APP}-*.sql.gz" -mtime +$LOCAL_RETENTION_DAYS -delete
+find "$BACKUP_DIR" -name "${APP}-*.sql.gz*" -mtime +$LOCAL_RETENTION_DAYS -delete
 echo "[$(date -Iseconds)] pruned local backups older than $LOCAL_RETENTION_DAYS days"
